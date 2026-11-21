@@ -1,0 +1,160 @@
+name: Process XBPS repositories
+
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: 'Tag dipisah spasi, atau "all"'
+        default: all
+        type: string
+  schedule:
+    - cron: '23 */6 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repo-process
+  cancel-in-progress: false
+
+env:
+  ALL_TAGS: 'x86_64 x86_64-musl aarch64 aarch64-musl armv6l armv6l-musl armv7l armv7l-musl i686'
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tags: ${{ steps.t.outputs.tags }}
+    steps:
+      - id: t
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          IN: ${{ inputs.tags || 'all' }}
+        run: |
+          set -euo pipefail
+          sel="$IN"
+          if [ "$sel" = all ]; then sel="$ALL_TAGS"; fi
+          out=""
+          for t in $sel; do
+            case " $ALL_TAGS " in
+              *" $t "*) out="$out $t" ;;
+              *) echo "::warning::tag asing diabaikan: $t" ;;
+            esac
+          done
+          out=$(echo $out | xargs -n1 | sort -u | xargs)
+          if [ -z "$out" ]; then echo "tidak ada tag valid"; exit 1; fi
+          for t in $out; do
+            if ! gh release view "$t" >/dev/null 2>&1; then
+              gh release create "$t" --prerelease \
+                --title "repository T4nOS for $t" \
+                --notes "XBPS repository untuk $t. Dikelola otomatis oleh CI."
+            fi
+          done
+          echo "tags=$(echo "$out" | jq -Rc 'split(" ")')" >> "$GITHUB_OUTPUT"
+
+  process:
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: signing
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ${{ fromJson(needs.prepare.outputs.tags) }}
+    container:
+      image: ghcr.io/void-linux/void-glibc-full:latest
+      env:
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/sbin:/usr/local/bin'
+    steps:
+      - name: Install tools
+        run: |
+          xbps-install -Syu xbps && xbps-install -yu
+          xbps-install -y bash git tar bsdtar python3 github-cli curl jq coreutils grep sed findutils
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/workflows
+      - name: Process tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ matrix.tag }}
+          SIGN_KEY: ${{ secrets.SIGN_KEY }}
+          SIGNEDBY: 'T4n Labs'
+        run: bash .github/workflows/process-tag.sh
+
+  json:
+    needs: [prepare, process]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ${{ fromJson(needs.prepare.outputs.tags) }}
+    container:
+      image: ghcr.io/void-linux/void-glibc-full:latest
+      env:
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/sbin:/usr/local/bin'
+    steps:
+      - name: Install tools
+        run: |
+          xbps-install -Syu xbps && xbps-install -yu
+          xbps-install -y bash git tar bsdtar python3 github-cli curl jq zstd
+      - uses: actions/checkout@v4
+      - name: Ambil repodata + daftar asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ matrix.tag }}
+        run: |
+          set -euo pipefail
+          rid=$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq .id)
+          gh api --paginate "repos/$GH_REPO/releases/$rid/assets" > assets.pages
+          jq -s 'add // []' assets.pages > assets.json
+          if gh release download "$TAG" -p "$TAG-repodata" -D . --clobber 2>/dev/null; then
+            bsdtar -xOf "$TAG-repodata" index.plist > index.plist 2>/dev/null \
+              || tar --zstd -xOf "$TAG-repodata" index.plist > index.plist
+          fi
+      - name: Generate JSON
+        env:
+          TAG: ${{ matrix.tag }}
+        run: python3 .github/workflows/gen-json.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: json-${{ matrix.tag }}
+          path: json/${{ matrix.tag }}/packages.json
+          if-no-files-found: error
+          retention-days: 3
+
+  commit:
+    needs: [prepare, json]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: json-*
+          path: json-artifacts
+      - name: Commit json
+        run: |
+          set -euo pipefail
+          found=0
+          for d in json-artifacts/json-*; do
+            [ -f "$d/packages.json" ] || continue
+            tag="${d##*/json-}"
+            mkdir -p "json/$tag"
+            cp "$d/packages.json" "json/$tag/packages.json"
+            found=1
+          done
+          if [ "$found" != 1 ]; then echo "tidak ada json dihasilkan"; exit 0; fi
+          git config user.name  "t4n-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add json
+          if git diff --cached --quiet; then echo "json tidak berubah"; exit 0; fi
+          git commit -m "chore(json): update index [skip ci]"
+          for i in 1 2 3; do
+            if git pull --rebase origin main && git push; then exit 0; fi
+            sleep 5
+          done
+          echo "::warning::commit json gagal setelah 3 percobaan"

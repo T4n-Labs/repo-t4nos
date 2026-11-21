@@ -1,0 +1,74 @@
+# Template file for 'metasploit'
+pkgname=metasploit
+version=6.5.8
+revision=3
+archs="x86_64 aarch64"
+wrksrc="metasploit-framework-${version}"
+hostmakedepends="ruby ruby-devel pkg-config"
+makedepends="ruby-devel postgresql-libs-devel libpcap-devel sqlite-devel libxml2-devel
+ libxslt-devel libffi-devel openssl-devel zlib-devel libyaml-devel"
+depends="ruby postgresql postgresql-client nmap libpcap"
+short_desc="Penetration testing framework for developing and using exploit code"
+maintainer="gh0st4n <darskevoid@gmail.com>"
+distributor="gh0st4n <darskevoid@gmail.com>"
+license="BSD-3-Clause"
+homepage="https://www.metasploit.com"
+distfiles="https://github.com/rapid7/metasploit-framework/archive/refs/tags/${version}.tar.gz"
+checksum=c590012173e96580deb37adb39cd96ec8c72199a10d4ed1c3d7ba1210d48568c
+nocross=yes
+
+# === FIX XBPS HOOKS ===
+nostrip=yes
+nodebug=yes
+python_version=ignore
+noverifyrdeps=yes
+
+_msfdir=/usr/lib/metasploit-framework
+
+do_build() {
+	bundle config set --local path vendor/bundle
+	bundle config set --local without "development:test:coverage"
+	bundle config set --local frozen true
+
+	bundle config set --local build.nokogiri "--use-system-libraries"
+	bundle config set --local build.sqlite3 "--enable-system-libraries"
+	bundle config set --local build.pg "--with-pg-config=/usr/bin/pg_config"
+
+	bundle install --jobs "${XBPS_MAKEJOBS:-1}"
+
+	find vendor/bundle -type f \( -name '*.o' -o -name 'gem_make.out' \
+		-o -name 'mkmf.log' \) -delete
+	rm -rf vendor/bundle/ruby/*/cache
+}
+
+do_install() {
+	vmkdir "${_msfdir#/}"
+
+	local f
+	for f in app config data db documentation lib modules plugins \
+		script scripts tools vendor .bundle \
+		Gemfile Gemfile.lock metasploit-framework.gemspec \
+		msf-json-rpc.ru msf-ws.ru \
+		msfconsole msfd msfdb msfmcpd msfrpc msfrpcd msfvenom; do
+		cp -a "${f}" "${DESTDIR}${_msfdir}/"
+	done
+
+	# Fix permission world-writable agar hook 14 tidak gagal
+	chmod -R go-w "${DESTDIR}${_msfdir}"
+
+	# === FIX WRAPPER SCRIPTS (FINAL) ===
+	# Gunakan 'cd' + 'bundle exec' agar load path Ruby ter-resolve dengan sempurna
+	vmkdir usr/bin
+	for f in msfconsole msfd msfdb msfmcpd msfrpc msfrpcd msfvenom; do
+		cat > "${DESTDIR}/usr/bin/${f}" << EOF
+#!/bin/sh
+MSF_DIR="/usr/lib/metasploit-framework"
+cd "\$MSF_DIR" || exit 1
+exec bundle exec ruby "./${f}" "\$@"
+EOF
+		chmod 755 "${DESTDIR}/usr/bin/${f}"
+	done
+
+	vlicense COPYING
+	vdoc "${FILESDIR}/README.voidlinux"
+}

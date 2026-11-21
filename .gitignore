@@ -1,0 +1,9 @@
+/void-packages/
+/work/
+/_site/
+key.pem
+*.xbps
+*.xbps.sig2
+*-repodata
+index.plist
+assets.json
