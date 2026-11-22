@@ -9,7 +9,9 @@ WORK="$(mktemp -d)"; KEY="$WORK/key.pem"
 trap 'rm -rf "$WORK"' EXIT
 printf '%s\n' "$SIGN_KEY" > "$KEY"; chmod 600 "$KEY"
 
-# ── kalibrasi semantik `xbps-uhelper cmpver` ──
+# ── kalibrasi semantik `xbps-uhelper cmpver` (stdout vs exit code) ──
+# Daripada mengasumsikan konvensi, pelajari signature "lebih besar" dari dua
+# probe yang jawabannya sudah diketahui.
 set +e
 gt_out=$(xbps-uhelper cmpver 2.0_1 1.0_1 2>/dev/null); gt_rc=$?
 lt_out=$(xbps-uhelper cmpver 1.0_1 2.0_1 2>/dev/null); lt_rc=$?
@@ -23,7 +25,7 @@ ver_gt() {
   [ "$o/$r" = "$gt_out/$gt_rc" ]
 }
 
-# ── inventory ──
+# ── inventory (paginated: aman untuk >100 asset) ──
 rid=$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq .id)
 gh api --paginate "repos/$GH_REPO/releases/$rid/assets" --jq '.[].name' > "$WORK/assets"
 has_repodata=no
@@ -32,6 +34,7 @@ if grep -qxF "$TAG-repodata" "$WORK/assets"; then has_repodata=yes; fi
 : > "$WORK/xbps"
 while IFS= read -r fn; do
   case "$fn" in *.xbps) ;; *) continue ;; esac
+  # '+' terbukti aman (nama asset utuh, URL raw & %2B sama-sama 200)
   if ! printf '%s' "$fn" | grep -qE '^[A-Za-z0-9._+-]+$'; then
     echo "::error::$TAG: nama asset di luar [A-Za-z0-9._+-] dilewati: $fn"; continue
   fi
@@ -45,7 +48,7 @@ while IFS= read -r fn; do
   printf '%s\t%s\t%s\n' "$name" "$pkgver" "$fn" >> "$WORK/xbps"
 done < "$WORK/assets"
 
-# ── rencana ──
+# ── rencana: keep versi tertinggi per nama, sisanya prune ──
 : > "$WORK/keep"; : > "$WORK/prune"
 for name in $(cut -f1 "$WORK/xbps" | sort -u); do
   best=""
@@ -53,6 +56,7 @@ for name in $(cut -f1 "$WORK/xbps" | sort -u); do
     [ "$n" = "$name" ] || continue
     if [ -z "$best" ] || ver_gt "$pv" "$best"; then best="$pv"; fi
   done < "$WORK/xbps"
+  # tie-break pkgver sama: arch-specific menang atas noarch
   chosen=""
   for f in $(awk -F'\t' -v n="$name" -v pv="$best" '$1==n && $2==pv {print $3}' "$WORK/xbps"); do
     case "$f" in *".$TAG.xbps") chosen="$f"; break ;; esac
@@ -76,6 +80,7 @@ if [ ! -s "$WORK/unsigned" ] && [ ! -s "$WORK/prune" ] && [ "$has_repodata" = ye
   echo "==> $TAG: tidak ada yang perlu diproses"; exit 0
 fi
 
+# tag jadi kosong: hapus prune + repodata lama, jangan tinggalkan indeks yatim
 if [ ! -s "$WORK/keep" ]; then
   while IFS= read -r fn; do
     gh release delete-asset "$TAG" "$fn" -y || true
@@ -90,18 +95,21 @@ if [ ! -s "$WORK/keep" ]; then
   exit 0
 fi
 
-# ── unduh ──
+# ── unduh yang di-keep ke folder kerja KOSONG ──
 mkdir -p "$WORK/repo"
 while IFS= read -r fn; do
   gh release download "$TAG" -p "$fn" -D "$WORK/repo" --clobber
 done < "$WORK/keep"
 
-# ── verifikasi nama ──
+# ── verifikasi nama: asset harus persis <pkgver>.<architecture>.xbps ──
+# GitHub me-rename karakter tertentu (terbukti: '~' → '.'). Hasil rename bisa
+# lolos charset check, tapi bikin client 404. Baca props.plist = parsing data,
+# bukan eksekusi kode — tetap aman untuk job pemegang secret.
 : > "$WORK/verified"
 while IFS= read -r fn; do
   f="$WORK/repo/$fn"
   if ! bsdtar -xOf "$f" props.plist > "$WORK/props.plist" 2>/dev/null; then
-    echo "::error::$TAG: props.plist tidak terbaca: $fn"
+    echo "::error::$TAG: props.plist tidak terbaca (bukan paket xbps valid?): $fn"
     rm -f "$f"; continue
   fi
   want=$(python3 - "$WORK/props.plist" <<'PY'
@@ -111,7 +119,7 @@ print(f"{d.get('pkgver','')}.{d.get('architecture','')}.xbps")
 PY
 )
   if [ "$fn" != "$want" ]; then
-    echo "::error::$TAG: nama asset '$fn' != isi paket '$want' — DITOLAK"
+    echo "::error::$TAG: nama asset '$fn' != isi paket '$want' (GitHub rename?) — DITOLAK"
     rm -f "$f"; continue
   fi
   printf '%s\n' "$fn" >> "$WORK/verified"
@@ -120,6 +128,7 @@ done < "$WORK/keep"
 if [ ! -s "$WORK/verified" ]; then
   echo "::error::$TAG: tidak ada paket lolos verifikasi"; exit 1
 fi
+# unsigned difilter ke yang lolos verifikasi saja
 if [ -s "$WORK/unsigned" ]; then
   grep -xF -f "$WORK/verified" "$WORK/unsigned" > "$WORK/unsigned.ok" || true
   mv "$WORK/unsigned.ok" "$WORK/unsigned"
@@ -147,7 +156,7 @@ while IFS= read -r fn; do
 done < "$WORK/unsigned"
 gh release upload "$TAG" "${up[@]}" --clobber
 
-# ── prune PALING TERAKHIR ──
+# ── prune PALING TERAKHIR: client tak pernah lihat indeks nunjuk file hilang ──
 while IFS= read -r fn; do
   echo "  prune: $fn"
   gh release delete-asset "$TAG" "$fn" -y || true

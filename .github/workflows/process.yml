@@ -8,7 +8,7 @@ on:
         default: all
         type: string
   schedule:
-    - cron: '23 */6 * * *'
+    - cron: '23 */6 * * *'   # cadangan; no-op kalau tak ada yang perlu diproses
 
 permissions:
   contents: write
@@ -21,6 +21,7 @@ env:
   ALL_TAGS: 'x86_64 x86_64-musl aarch64 aarch64-musl armv6l armv6l-musl armv7l armv7l-musl i686'
 
 jobs:
+  # 0. tag idempotent. Tanpa secret, tanpa template.
   prepare:
     runs-on: ubuntu-latest
     outputs:
@@ -48,11 +49,12 @@ jobs:
             if ! gh release view "$t" >/dev/null 2>&1; then
               gh release create "$t" --prerelease \
                 --title "repository T4nOS for $t" \
-                --notes "XBPS repository untuk $t. Dikelola otomatis oleh CI."
+                --notes "XBPS repository untuk $t. Dikelola otomatis oleh CI — jangan edit manual."
             fi
           done
           echo "tags=$(echo "$out" | jq -Rc 'split(" ")')" >> "$GITHUB_OUTPUT"
 
+  # 1. index + sign + prune. PEGANG SECRET, TIDAK BACA TEMPLATE.
   process:
     needs: prepare
     runs-on: ubuntu-latest
@@ -70,7 +72,7 @@ jobs:
         run: |
           xbps-install -Syu xbps && xbps-install -yu
           xbps-install -y bash git tar bsdtar python3 github-cli curl jq coreutils grep sed findutils
-      - name: Checkout
+      - name: Checkout (hanya script CI — template sengaja tidak diambil)
         uses: actions/checkout@v4
         with:
           sparse-checkout: .github/workflows
@@ -83,6 +85,7 @@ jobs:
           SIGNEDBY: 'T4n Labs'
         run: bash .github/workflows/process-tag.sh
 
+  # 2. packages.json. BACA TEMPLATE, TANPA SECRET.
   json:
     needs: [prepare, process]
     if: ${{ !cancelled() && needs.prepare.result == 'success' }}
@@ -115,7 +118,7 @@ jobs:
             bsdtar -xOf "$TAG-repodata" index.plist > index.plist 2>/dev/null \
               || tar --zstd -xOf "$TAG-repodata" index.plist > index.plist
           fi
-      - name: Generate JSON
+      - name: Generate packages.json
         env:
           TAG: ${{ matrix.tag }}
         run: python3 .github/workflows/gen-json.py
@@ -126,6 +129,7 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  # 3. commit json/** sekali saja
   commit:
     needs: [prepare, json]
     if: ${{ !cancelled() && needs.prepare.result == 'success' }}

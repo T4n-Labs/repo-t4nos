@@ -1,4 +1,5 @@
 # Konstanta & helper bersama. TIDAK ada side effect selain assignment.
+# Semua log ke STDERR — stdout dipakai untuk data (dipanggil via mapfile).
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VP="$REPO_DIR/void-packages"
 TPL="$REPO_DIR/pkg-template"
@@ -7,9 +8,9 @@ ALL=(x86_64 x86_64-musl aarch64 aarch64-musl armv6l armv6l-musl armv7l armv7l-mu
 HOST_ARCH="$(xbps-uhelper arch 2>/dev/null || uname -m)"
 
 B='\033[0;34m'; G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; N='\033[0m'
-info(){ printf "${B}[INFO]${N} %s\n" "$*"; }
-ok(){   printf "${G}[OK]${N} %s\n" "$*"; }
-warn(){ printf "${Y}[WARN]${N} %s\n" "$*"; }
+info(){ printf "${B}[INFO]${N} %s\n" "$*" >&2; }
+ok(){   printf "${G}[OK]${N} %s\n"   "$*" >&2; }
+warn(){ printf "${Y}[WARN]${N} %s\n" "$*" >&2; }
 err(){  printf "${R}[ERROR]${N} %s\n" "$*" >&2; }
 die(){  err "$*"; exit 1; }
 

@@ -1,17 +1,27 @@
 #!/usr/bin/env bash
 # T4n OS — developer tool. Entry point tipis; logika ada di src/.
 set -euo pipefail
-VDEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# resolusi symlink, supaya ./tools (root) atau symlink di PATH tetap benar
+_self="${BASH_SOURCE[0]}"
+while [ -L "$_self" ]; do
+    _dir="$(cd -P "$(dirname "$_self")" && pwd)"
+    _self="$(readlink "$_self")"
+    case "$_self" in /*) ;; *) _self="$_dir/$_self" ;; esac
+done
+VDEV_DIR="$(cd -P "$(dirname "$_self")" && pwd)"
+unset _self _dir
+
 for _m in common template env build upload git; do
     # shellcheck source=/dev/null
     . "$VDEV_DIR/src/$_m.sh"
 done
 unset _m
 
-usage() {
-    cat <<EOF
+usage(){
+    cat >&2 <<EOF
 T4n OS developer tool (xbps-src)
-  -s,  --setup              clone void-packages + binary-bootstrap
+  -s,  --setup              clone void-packages (full) + binary-bootstrap
   -sy, --sync               git pull + salin template baru/berubah
   -b,  --build [pkg...] [-a arch...|all|'x86_64*']
   -u,  --upload [pkg...]    upload ke tag + trigger CI, lalu push/PR

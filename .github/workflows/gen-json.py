@@ -6,7 +6,12 @@ import fnmatch, json, os, pathlib, plistlib, re
 TAG = os.environ["TAG"]
 ALL = ("x86_64 x86_64-musl aarch64 aarch64-musl armv6l armv6l-musl "
        "armv7l armv7l-musl i686").split()
+
+# HARUS sama dengan BASE di setup.sh. Dua pilihan:
+#   release langsung (jalan tanpa Worker)  ← sekarang
+#   "https://repo.t4nlabs.web.id"          ← setelah Cloudflare Worker aktif
 BASE = "https://github.com/T4n-Labs/repo-t4nos/releases/download"
+
 TPL = pathlib.Path("pkg-template")
 
 
@@ -21,6 +26,7 @@ def field(text, key):
 
 
 def expand(archs):
+    """kosong/noarch = 9 tag; glob positif; ~token = negasi (konvensi Void)."""
     if not archs or archs == "noarch":
         return list(ALL)
     pos, neg = [], []
@@ -51,6 +57,7 @@ if TPL.is_dir():
             "homepage": field(t, "homepage"),
             "maintainer": field(t, "maintainer"),
             "distributor": field(t, "distributor"),
+            "license": field(t, "license"),
         }
 
 assets = []
@@ -84,15 +91,16 @@ for pr in props:
         "size": sizes.get(fn),
         "status": "ready",
         "description": desc,
-        "desc": desc,
+        "desc": desc,                      # alias: frontend lama baca .desc
         "homepage": pr.get("homepage") or tpl.get("homepage", ""),
         "maintainer": pr.get("maintainer") or tpl.get("maintainer", ""),
         "distributor": tpl.get("distributor", ""),
-        "license": pr.get("license", ""),
+        "license": pr.get("license") or tpl.get("license", ""),
         "url": f"{BASE}/{TAG}/{fn}",
     })
     seen.add(name)
 
+# recipe-only: template ada, biner belum ada di tag ini
 for name, t in templates.items():
     if name in seen or TAG not in t["archs"]:
         continue
@@ -101,7 +109,7 @@ for name, t in templates.items():
         "filename": None, "size": None, "status": "recipe",
         "description": t["description"], "desc": t["description"],
         "homepage": t["homepage"], "maintainer": t["maintainer"],
-        "distributor": t["distributor"], "license": "", "url": None,
+        "distributor": t["distributor"], "license": t["license"], "url": None,
     })
 
 out.sort(key=lambda e: e["name"])

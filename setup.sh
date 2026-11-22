@@ -1,6 +1,6 @@
 #!/bin/sh
 # T4n OS — Repository Setup
-#   curl -sLO https://repo-web.t4nlabs.web.id/setup.sh && sudo sh setup.sh
+#   curl -sLO https://raw.githubusercontent.com/T4n-Labs/repo-t4nos/main/setup.sh && sudo sh setup.sh
 set -eu
 
 # TEMPORER: URL release langsung (sebelum Cloudflare Worker aktif).
