@@ -214,11 +214,10 @@ awal, dokumentasi ID/EN, Worker `t4n-repo` dibuat.
 
 Urutan pekerjaan yang tersisa:
 
-1. Zona `t4nlabs.web.id` Active di Cloudflare dan custom domain
-   `repo.t4nlabs.web.id` terpasang (Founder).
+1. ~~Zona Active dan custom domain terpasang~~ **Selesai** (22 Nov 2026, lulus `vdev/DNS-check.sh` 14/14).
 2. Minimal satu paket di setiap tag yang diumumkan.
-3. Tes end-to-end `xbps-install -S` lewat domain di sistem bersih; catat
-   fingerprint dari prompt impor kunci.
+3. Tes end-to-end `xbps-install -S` lewat domain di sistem bersih; catat fingerprint
+   dari prompt impor kunci. Menunggu paket pertama (domain, TLS, dan proxy sudah terverifikasi).
 4. Isi `FINGERPRINT` di `setup.sh`, README (ID/EN), dan website.
 5. Ganti `BASE` di `setup.sh` dan `gen-json.py` dari URL release ke
    `https://repo.t4nlabs.web.id`; perbarui `vdocs/*/DEV.md` §12.

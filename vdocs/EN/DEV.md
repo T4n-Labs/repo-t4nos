@@ -419,6 +419,7 @@ anything else gets a 404 even if the file exists on the release.
 | Install fails right after `-u` | binaries not signed yet; wait for the workflow |
 | `commit json` warns 3× | branch protection blocks the bot's push; allow the Founder and `github-actions` to bypass, or drop the PR requirement |
 | Website stale | index not regenerated; check the `json` and `commit` jobs |
+| Domain looks broken | run `bash vdev/DNS-check.sh` and compare with §13 |
 
 ---
 
@@ -434,12 +435,49 @@ to go live:
 | Base URL in `setup.sh` | `https://repo.t4nlabs.web.id` | `BASE` is still the GitHub release URL (temporary) |
 | `url` field in `packages.json` | domain | `BASE` in `gen-json.py` is still the GitHub release URL |
 | Key fingerprint | published in README + website | `FINGERPRINT` in `setup.sh` is still a placeholder; fill it after the first sync |
-| Worker + domain | `repo.t4nlabs.web.id/<tag>` live | Worker `t4n-repo` is created; the custom domain is attached once the `t4nlabs.web.id` zone is Active in Cloudflare |
-| End-to-end verification | `xbps-install -S` through the domain, including first key import | not done yet |
+| Worker + domain | `repo.t4nlabs.web.id/<tag>` live | **Live**; passes `DNS-check.sh` 14/14 (22 Nov 2026) |
+| End-to-end verification | `xbps-install -S` through the domain, including first key import | domain, TLS and proxy verified; `xbps-install -S` waits for the first package |
 
 Order: domain active → `curl -I` against the domain → `xbps-install -S` on a
 clean system (note the fingerprint from the prompt) → fill in `FINGERPRINT` →
 switch `BASE` in `setup.sh` and `gen-json.py` → announce.
+
+## 13. Verifying the `repo.t4nlabs.web.id` Domain
+
+`vdev/DNS-check.sh` tests the domain **without any XBPS binary**. It is
+read-only, so anyone with `curl` (and `dig` for the DNS part) can run it.
+
+```sh
+bash vdev/DNS-check.sh                  # DNS, TLS, Worker behaviour
+PROBE=ping.txt bash vdev/DNS-check.sh   # + proxy 200 / Range / identical content
+```
+
+Optional variables: `BASE`, `WEB`, `GH`, `TAG` (default `x86_64-musl`), `PROBE`.
+The script exits 0 only if every check passes.
+
+| Group | What is checked |
+|---|---|
+| DNS | `t4nlabs.web.id` NS are on Cloudflare; `repo` does not point at GitHub Pages |
+| Worker | `/` → 302 to the website; `/<tag>` and `/<tag>/` → 302 to the release page; unknown tag → 404; invalid file name → 404; POST → 405 |
+| Proxy | `HEAD`/`GET` → 200, `Range` → 206, and content via the domain equals content straight from GitHub (only with `PROBE`) |
+
+Proxy test with a real file (needs write access, so the Founder runs it):
+
+```sh
+echo ping-ok > ping.txt
+gh release upload x86_64-musl ping.txt -R T4n-Labs/repo-t4nos
+PROBE=ping.txt bash vdev/DNS-check.sh
+gh release delete-asset x86_64-musl ping.txt -R T4n-Labs/repo-t4nos -y
+```
+
+CI ignores assets other than `.xbps`, so `ping.txt` does no harm, but delete it
+afterwards. If the release does not exist yet, create it first with
+`gh release create <tag> --prerelease` (title and notes as in `process.yml`).
+
+`<tag>-repodata` returns 404 until a package has been processed; that is
+expected, not a domain failure.
+
+Reference result (22 November 2026): 14 passed, 0 failed.
 
 ---
 

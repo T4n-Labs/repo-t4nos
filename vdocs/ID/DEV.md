@@ -421,6 +421,7 @@ luar itu dijawab 404 walaupun file-nya ada di release.
 | Install gagal tepat setelah `-u` | biner belum di-sign; tunggu workflow selesai |
 | `commit json` warning 3× | branch protection menolak push bot; izinkan Founder dan `github-actions` bypass, atau hapus syarat PR |
 | Website basi | indeks belum dibuat ulang; cek job `json` dan `commit` |
+| Domain terlihat bermasalah | jalankan `bash vdev/DNS-check.sh` dan cocokkan dengan §13 |
 
 ---
 
@@ -435,12 +436,50 @@ empat job (`prepare`, `process`, `json`, `commit`); tidak ada job `policy` atau
 | Base URL di `setup.sh` | `https://repo.t4nlabs.web.id` | `BASE` masih URL release GitHub (sementara) |
 | Field `url` di `packages.json` | domain | `BASE` di `gen-json.py` masih URL release GitHub |
 | Fingerprint kunci | diumumkan di README + website | `FINGERPRINT` di `setup.sh` masih placeholder; diisi setelah sinkronisasi pertama |
-| Worker + domain | `repo.t4nlabs.web.id/<tag>` aktif | Worker `t4n-repo` sudah dibuat; custom domain dipasang setelah zona `t4nlabs.web.id` Active di Cloudflare |
-| Verifikasi end-to-end | `xbps-install -S` lewat domain, termasuk impor kunci pertama | belum dilakukan |
+| Worker + domain | `repo.t4nlabs.web.id/<tag>` aktif | **Aktif**; lulus `DNS-check.sh` 14/14 (22 Nov 2026) |
+| Verifikasi end-to-end | `xbps-install -S` lewat domain, termasuk impor kunci pertama | domain, TLS, dan proxy sudah terverifikasi; `xbps-install -S` menunggu paket pertama |
 
 Urutan: domain aktif → `curl -I` ke domain → `xbps-install -S` di sistem bersih
 (catat fingerprint dari prompt) → isi `FINGERPRINT` → ganti `BASE` di `setup.sh`
 dan `gen-json.py` → umumkan.
+
+## 13. Verifikasi Domain `repo.t4nlabs.web.id`
+
+Skrip `vdev/DNS-check.sh` menguji domain **tanpa biner XBPS**. Skrip hanya
+membaca, jadi aman dijalankan siapa pun yang punya `curl` (dan `dig` untuk bagian
+DNS).
+
+```sh
+bash vdev/DNS-check.sh                  # DNS, TLS, perilaku Worker
+PROBE=ping.txt bash vdev/DNS-check.sh   # + uji proxy 200 / Range / isi identik
+```
+
+Variabel opsional: `BASE`, `WEB`, `GH`, `TAG` (default `x86_64-musl`), `PROBE`.
+Skrip keluar dengan kode 0 hanya bila semua uji lulus.
+
+| Kelompok | Yang diuji |
+|---|---|
+| DNS | NS `t4nlabs.web.id` di Cloudflare; `repo` tidak mengarah ke GitHub Pages |
+| Worker | `/` → 302 ke website; `/<tag>` dan `/<tag>/` → 302 ke halaman release; tag tak dikenal → 404; nama file tak valid → 404; POST → 405 |
+| Proxy | `HEAD`/`GET` → 200, `Range` → 206, dan isi lewat domain sama dengan isi langsung dari GitHub (hanya dengan `PROBE`) |
+
+Uji proxy dengan file nyata (butuh akses write, jadi Founder yang menjalankan):
+
+```sh
+echo ping-ok > ping.txt
+gh release upload x86_64-musl ping.txt -R T4n-Labs/repo-t4nos
+PROBE=ping.txt bash vdev/DNS-check.sh
+gh release delete-asset x86_64-musl ping.txt -R T4n-Labs/repo-t4nos -y
+```
+
+CI mengabaikan asset selain `.xbps`, jadi `ping.txt` tidak mengganggu, tetapi
+tetap hapus setelah selesai. Jika release belum ada, buat dulu dengan
+`gh release create <tag> --prerelease` (judul dan notes seperti di `process.yml`).
+
+`<tag>-repodata` berstatus 404 selama belum ada paket yang diproses; itu normal,
+bukan kegagalan domain.
+
+Hasil acuan (22 November 2026): 14 lulus, 0 gagal.
 
 ---
 
