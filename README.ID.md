@@ -12,18 +12,19 @@ musl**. Satu repositori, sembilan release tag (`x86_64`, `x86_64-musl`,
 ## Instalasi cepat
 
 ```sh
-curl -sLO https://raw.githubusercontent.com/T4n-Labs/repo-t4nos/main/setup.sh
+curl -fsSLO https://repo.t4nlabs.web.id/setup.sh
 less setup.sh
 sudo sh setup.sh
 ```
 
 ## Fingerprint kunci
 
-> **Belum dipublikasikan.** Jangan mengimpor kunci repositori sebelum
-> fingerprint diumumkan di sini dan di https://repo-web.t4nlabs.web.id/.
+```
+63:35:0c:65:0d:a5:f1:87:52:7e:c5:e9:13:3a:d6:2a
+```
 
-Jawab `yes` pada prompt kunci XBPS hanya jika fingerprint yang ditampilkan sama
-persis dengan yang dipublikasikan di sini.
+Ditandatangani `T4n Labs`; satu kunci untuk semua tag. Jawab `yes` pada prompt
+kunci XBPS hanya jika fingerprint yang ditampilkan sama persis dengan ini.
 
 ## Dokumentasi
 

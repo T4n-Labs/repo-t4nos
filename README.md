@@ -11,18 +11,19 @@ One repository, nine release tags (`x86_64`, `x86_64-musl`, `aarch64`,
 ## Quick install
 
 ```sh
-curl -sLO https://raw.githubusercontent.com/T4n-Labs/repo-t4nos/main/setup.sh
+curl -fsSLO https://repo.t4nlabs.web.id/setup.sh
 less setup.sh
 sudo sh setup.sh
 ```
 
 ## Key fingerprint
 
-> **Not published yet.** Do not import the repository key until the fingerprint
-> is announced here and on https://repo-web.t4nlabs.web.id/.
+```
+63:35:0c:65:0d:a5:f1:87:52:7e:c5:e9:13:3a:d6:2a
+```
 
-Answer `yes` to the XBPS key prompt only if the fingerprint it shows matches the
-one published here exactly.
+Signed by `T4n Labs`; one key signs every tag. Answer `yes` to the XBPS key prompt
+only if the fingerprint it shows matches this one exactly.
 
 ## Documentation
 
