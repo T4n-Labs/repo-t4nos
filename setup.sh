@@ -5,16 +5,16 @@
 #   sudo sh setup.sh update     # sinkron indeks + upgrade (xbps-install -Su)
 set -eu
 
-# TEMPORER: URL release langsung sampai tes `xbps-install -S` lewat domain lulus.
-# Setelah itu ganti default ke: https://repo.t4nlabs.web.id
-# Uji domain tanpa mengubah berkas:
-#   sudo env T4N_BASE=https://repo.t4nlabs.web.id sh setup.sh
-BASE="${T4N_BASE:-https://github.com/T4n-Labs/repo-t4nos/releases/download}"
+# Base URL repo (proxy Cloudflare Worker ke GitHub Releases).
+# Cadangan bila domain bermasalah, pakai URL release langsung:
+#   sudo env T4N_BASE=https://github.com/T4n-Labs/repo-t4nos/releases/download sh setup.sh
+BASE="${T4N_BASE:-https://repo.t4nlabs.web.id}"
 
 SITE="https://repo-web.t4nlabs.web.id/"
 CONF="${CONF_FILE:-/etc/xbps.d/10-t4nos.conf}"
 PLACEHOLDER="<ISI-SETELAH-PROSES-PERTAMA>"
-FINGERPRINT="$PLACEHOLDER"
+# Fingerprint kunci repositori (satu SIGN_KEY untuk semua tag), dari prompt XBPS.
+FINGERPRINT="63:35:0c:65:0d:a5:f1:87:52:7e:c5:e9:13:3a:d6:2a"
 
 CMD="${1:-setup}"
 
