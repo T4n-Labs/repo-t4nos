@@ -97,6 +97,7 @@ Cloudflare Access), kodenya ditempel ke `worker.js`. Perilaku akhir:
 | Request | Hasil |
 |---|---|
 | `/` | redirect 302 ke `https://repo-web.t4nlabs.web.id/` |
+| `/setup.sh` | disajikan dari `raw.githubusercontent.com/T4n-Labs/repo-t4nos/main/setup.sh` (ditambahkan di Fase 7) |
 | `/<tag>` | redirect 302 ke `github.com/T4n-Labs/repo-t4nos/releases/tag/<tag>` |
 | `/<tag>/<file>` | diproxy ke `releases/download/<tag>/<file>` (GET/HEAD; header `range`, `if-modified-since`, `if-none-match`, `user-agent` diteruskan) |
 | lainnya | 404 (tag di luar 9 tag, atau nama file di luar `[A-Za-z0-9._+-]`) |
@@ -166,6 +167,40 @@ manual oleh pemilik repo).
 resep tugas, larangan). Berkas ini (`process.md`) melengkapinya dengan sejarah
 dan keputusan.
 
+### Fase 7 — Route `/setup.sh` dan temuan 23 November 2026
+
+Worker diberi route `/setup.sh` yang menyajikan `setup.sh` terbaru dari `main`
+(sumber URL tetap, tanpa input user; `cache-control` 300 dtk saat sukses,
+sebaiknya `no-store` saat error). Dengan itu one-liner resmi menjadi
+`curl -fsSL https://repo.t4nlabs.web.id/setup.sh | sudo sh` (dijalankan dengan
+`sh`, karena skrip POSIX). Hasil uji: `HEAD` 200 `text/plain`, isi diawali
+`#!/bin/sh`, dan `DNS-check.sh` tanpa `PROBE` 10 lulus, 0 gagal (empat uji proxy
+berkas uji dilewati karena `PROBE` kosong, bukan regresi). Perintah `cmp` gagal
+hanya karena dijalankan di folder tanpa `setup.sh`.
+
+Temuan: `x86_64-musl-repodata` kini HTTP 200 (sebelumnya 404). Artinya CI
+`process` sudah menghasilkan index untuk tag itu. Karena hanya `process-tag.sh`
+yang membuat repodata dan ia mewajibkan `SIGN_KEY`, key dan secret hampir pasti
+sudah terpasang (tidak dikonfirmasi langsung). Docs (USER, README, header
+`setup.sh`) diperbarui ke URL domain.
+
+### Fase 8 — `setup.sh` dua perintah dan tes end-to-end (23 November 2026)
+
+`setup.sh` diperluas: `setup` (default; deteksi arsitektur dan libc otomatis) dan
+`update` (`xbps-install -Su`, dengan pengecekan repo terpasang dan stdin dialihkan
+agar aman lewat pipe). Variabel `T4N_BASE` menimpa base URL. Diuji dengan mock
+`xbps` (setup, update, pipe, penolakan arsitektur, bukan root).
+
+Tes nyata di T4n OS x86_64 glibc: one-liner lewat pipe berjalan dan menampilkan
+prompt impor kunci (`RSA signed by "T4n Labs"`, fingerprint `63:35:0c:65:0d:a5:f1:87:52:7e:c5:e9:13:3a:d6:2a`); `tpkg 1.1.0_1`
+terpasang dengan tanda tangan RSA terverifikasi. Config sempat memakai URL release
+(karena `BASE` default belum diganti), lalu diganti ke domain: repodata lewat domain
+berhasil. Tes pertama lewat domain **tidak** membuktikan unduhan paket karena
+log menunjukkan `0 downloaded` (paket diambil dari cache XBPS); setelah `tpkg`
+dihapus beserta cache-nya, `.sig2` dan `.xbps` terunduh lewat domain (`1 downloaded`)
+dan tanda tangan lulus. Default `BASE` lalu dialihkan ke domain, dan fingerprint
+diisi di `setup.sh`, README, dan USER.
+
 ---
 
 ## 5. Keputusan dan alasannya
@@ -180,8 +215,8 @@ dan keputusan.
 | Website di `repo-web.t4nlabs.web.id` | membebaskan `repo.t4nlabs.web.id` untuk Worker |
 | Record GitHub Pages **DNS only** | GitHub harus bisa menerbitkan sertifikat HTTPS sendiri |
 | Worker mempertahankan redirect `/` dan `/<tag>` | memudahkan orang yang membuka domain di browser; tidak mengganggu `xbps` |
-| `setup.sh` diunduh dari `raw.githubusercontent.com` di docs | satu-satunya URL yang pasti jalan; route `/setup.sh` di Worker bisa ditambah nanti |
-| `BASE` di `setup.sh`/`gen-json.py` tetap URL release sampai tes `xbps-install -S` lulus | jangan beralih sebelum client asli terbukti jalan lewat domain |
+| `setup.sh` disajikan Worker di `https://repo.t4nlabs.web.id/setup.sh` | satu domain untuk semua; sumber tetap `main` di raw GitHub, tanpa input user |
+| `BASE` di `setup.sh`/`gen-json.py` dialihkan ke `https://repo.t4nlabs.web.id` setelah tes `xbps-install -S` lewat domain lulus (23 Nov) | client asli terbukti jalan lewat domain; cadangan: `T4N_BASE=<URL release>` |
 | Allowlist nama file `[A-Za-z0-9._+-]` identik di `common.sh`, `process-tag.sh`, Worker | `+` terbukti aman di GitHub Releases, `~` tidak |
 
 ## 6. Masalah dan jebakan yang ditemukan
@@ -206,25 +241,27 @@ dan keputusan.
 | Domain `repo.t4nlabs.web.id` aktif, lulus `DNS-check.sh` 14/14 | **terkonfirmasi** (22 Nov 2026) |
 | Worker `t4n-repo` aktif, `workers.dev` dimatikan | terkonfirmasi |
 | Release `x86_64-musl` ada | terkonfirmasi |
-| Paket XBPS pertama | **belum ada** |
-| Key signing, secret `SIGN_KEY`, Environment `signing`, ruleset `main` | tidak dikonfirmasi dalam percakapan |
-| `FINGERPRINT` di `setup.sh`/README | masih placeholder (belum ada fingerprint) |
-| `BASE` di `setup.sh` dan `gen-json.py` | masih URL release GitHub |
-| Tes `xbps-install -S` end-to-end lewat domain | belum dilakukan (butuh paket pertama) |
+| `/setup.sh` lewat Worker | terkonfirmasi (HTTP 200, isi `#!/bin/sh`, 23 Nov 2026) |
+| Paket XBPS `x86_64` | `tpkg 1.1.0_1` terpasang via URL release dan via domain (23 Nov 2026); `x86_64-musl-repodata` HTTP 200; tag lain belum dicek |
+| Key signing, secret `SIGN_KEY`, Environment `signing` | kemungkinan besar sudah (repodata hanya dibuat `process-tag.sh`, yang mewajibkan `SIGN_KEY`); tidak dikonfirmasi langsung |
+| Ruleset `main` | tidak dikonfirmasi |
+| `FINGERPRINT` di `setup.sh`/README/USER | `63:35:0c:65:0d:a5:f1:87:52:7e:c5:e9:13:3a:d6:2a` (dari prompt XBPS, 23 Nov 2026); website belum; perbandingan modulus dengan `keys/key.pem.pub` belum dilaporkan |
+| `BASE` di `setup.sh` dan `gen-json.py` | berkas hasil edit (domain) diserahkan; penerapan di repo tidak dikonfirmasi |
+| Tes `xbps-install -S` end-to-end lewat domain | **terkonfirmasi** (x86_64 glibc, 23 Nov 2026): repodata, `.sig2`, dan `.xbps` diunduh via domain, RSA terverifikasi |
 | `worker/index.js` di repo, `/worker/` dan `/vdocs/` di CODEOWNERS | tidak dikonfirmasi |
 | `CONTRIBUTING.md` / `CONTRIBUTING.ID.md`, LICENSE | belum ada / belum diputuskan |
 
 ## 8. Langkah berikutnya (berurutan)
 
-1. Pastikan key, secret, Environment, dan ruleset sudah terpasang (Fase 1
-   langkah 2–4); hapus zona salah `t4blabs.web.id` bila masih ada.
-2. Build dan upload paket pertama (`zvc` cukup), jalankan `process.yml`, tunggu
-   CI hijau, pastikan `<tag>-repodata` dan `.sig2` muncul di release.
-3. Di sistem bersih: set `repository=https://repo.t4nlabs.web.id/<tag>` lalu
-   `xbps-install -S`; catat fingerprint dari prompt impor kunci.
-4. Isi `FINGERPRINT` di `setup.sh`, README (ID/EN), dan website.
-5. Ganti `BASE` di `setup.sh` dan `gen-json.py` ke `https://repo.t4nlabs.web.id`;
-   perbarui `DEV` §12 dan `PROMPT.md` §8.
+1. Pastikan ruleset `main` terpasang dan hapus zona salah `t4blabs.web.id`
+   bila masih ada (key dan secret kemungkinan sudah ada, lihat §7).
+2. Cek isi release `x86_64-musl` (`.xbps` dan `.xbps.sig2` ada) dan pastikan
+   setiap tag yang diumumkan punya minimal satu paket.
+3. **Selesai** (23 Nov 2026): tes end-to-end lewat domain lulus (lihat Fase 8).
+4. Isi fingerprint di website; bandingkan modulus kunci yang diimpor XBPS dengan
+   `keys/key.pem.pub`.
+5. Terapkan berkas hasil edit (`setup.sh`, `gen-json.py`, README, USER) ke repo,
+   lalu jalankan `process.yml` supaya `packages.json` memakai URL domain.
 6. Tambah `worker/index.js`, `/worker/` dan `/vdocs/` ke CODEOWNERS, tulis
    `CONTRIBUTING*`, putuskan LICENSE.
 7. Selesaikan jebakan di §6 (terutama `archs=all` dan tag kosong).

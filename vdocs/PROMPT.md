@@ -108,7 +108,7 @@ Peran manusia:
 | `.github/workflows/process.yml` | satu-satunya workflow: `prepare` → `process` ×9 → `json` ×9 → `commit` |
 | `.github/workflows/process-tag.sh` | per tag: inventory → rencana → unduh → verifikasi → index → sign → upload → prune (**memegang secret**) |
 | `.github/workflows/gen-json.py` | `index.plist` + field template → `json/<tag>/packages.json` (tanpa secret) |
-| `setup.sh` | skrip user, **POSIX sh**: deteksi arsitektur, tulis `/etc/xbps.d/10-t4nos.conf`, jalankan `xbps-install -S` |
+| `setup.sh` | skrip user, **POSIX sh**: `setup` (default; deteksi arsitektur+libc, tulis `/etc/xbps.d/10-t4nos.conf`, `xbps-install -S`) dan `update` (`xbps-install -Su`); `T4N_BASE` menimpa base URL |
 | `pkg-template/<pkg>/template` | resep paket format xbps-src, datar tanpa folder kategori |
 | `json/<tag>/packages.json` | keluaran CI, di-commit balik oleh job `commit`; jangan diedit manual |
 | `keys/key.pem.pub` | satu-satunya file kunci yang publik |
@@ -197,6 +197,7 @@ tidak boleh diminta menempelkan token.
 | Request ke Worker | Hasil |
 |---|---|
 | `/` | redirect 302 ke `https://repo-web.t4nlabs.web.id/` |
+| `/setup.sh` | disajikan dari `raw.githubusercontent.com/T4n-Labs/repo-t4nos/main/setup.sh` (`text/plain`; cache 300 dtk saat sukses, sebaiknya `no-store` saat error); sumber URL tetap, tanpa input user |
 | `/<tag>` | redirect 302 ke halaman release GitHub tag itu |
 | `/<tag>/<file>` | diproxy ke `releases/download/<tag>/<file>` (hanya GET/HEAD; header `range`, `if-modified-since`, `if-none-match`, `user-agent` diteruskan) |
 | lainnya | 404 |
@@ -214,20 +215,27 @@ awal, dokumentasi ID/EN, Worker `t4n-repo` dibuat.
 
 Urutan pekerjaan yang tersisa:
 
-1. ~~Zona Active dan custom domain terpasang~~ **Selesai** (22 Nov 2026, lulus `vdev/DNS-check.sh` 14/14).
-2. Minimal satu paket di setiap tag yang diumumkan.
-3. Tes end-to-end `xbps-install -S` lewat domain di sistem bersih; catat fingerprint
-   dari prompt impor kunci. Menunggu paket pertama (domain, TLS, dan proxy sudah terverifikasi).
-4. Isi `FINGERPRINT` di `setup.sh`, README (ID/EN), dan website.
-5. Ganti `BASE` di `setup.sh` dan `gen-json.py` dari URL release ke
-   `https://repo.t4nlabs.web.id`; perbarui `vdocs/*/DEV.md` §12.
+1. **Selesai** (22-23 Nov 2026): zona Active, custom domain terpasang,
+   `vdev/DNS-check.sh` lulus, `/setup.sh` disajikan Worker.
+2. Minimal satu paket di setiap tag yang diumumkan. `x86_64-musl-repodata`
+   sudah ada (HTTP 200, 23 Nov 2026); tag lain belum dicek.
+3. **Selesai** (23 Nov 2026): tes end-to-end lewat domain lulus di x86_64
+   (repodata, `.sig2`, dan `.xbps` diunduh via `repo.t4nlabs.web.id`, tanda tangan
+   RSA terverifikasi, `tpkg` terpasang). Catatan uji: hapus cache
+   `/var/cache/xbps` dulu, kalau tidak paket diambil dari cache, bukan dari domain.
+4. Fingerprint `63:35:0c:65:0d:a5:f1:87:52:7e:c5:e9:13:3a:d6:2a` sudah diisi di `setup.sh`,
+   README, dan USER; **website belum**. Perbandingan modulus kunci terimpor
+   dengan `keys/key.pem.pub` belum dilaporkan.
+5. Berkas hasil edit (`setup.sh`, `gen-json.py` dengan `BASE` ke domain, README,
+   USER) siap diterapkan; penerapan di repo tidak dikonfirmasi. Field `url` di
+   `packages.json` berubah pada run `process.yml` berikutnya. Perbarui
+   `vdocs/*/DEV.md` §12.
 6. Tambah `worker/index.js`, serta `/worker/` dan `/vdocs/` ke CODEOWNERS.
 7. `CONTRIBUTING.md` / `CONTRIBUTING.ID.md` belum ada. LICENSE belum diputuskan.
 
 Backlog teknis (opsional): download incremental di `process-tag.sh`; sumber data
 website (`raw.githubusercontent.com` punya cache dan rate limit; alternatif
-Pages di subdomain sendiri); route `/setup.sh` di Worker; integrasi `xbps-src`
-di Let-X.
+Pages di subdomain sendiri); integrasi `xbps-src` di Let-X.
 
 ---
 
@@ -270,6 +278,7 @@ shellcheck vdev/tools.sh vdev/src/*.sh .github/workflows/process-tag.sh   # bila
 bash -c '. vdev/src/common.sh; . vdev/src/template.sh; expand_archs "x86_64* ~x86_64-musl"'
 ```
 
+Setiap kali Worker atau DNS diubah, jalankan juga `bash vdev/DNS-check.sh`.
 Laporkan hasil tiap perintah. Kalau suatu perintah tidak bisa dijalankan (alat
 tidak ada, tidak ada akses), katakan itu, jangan dianggap lulus.
 

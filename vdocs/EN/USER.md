@@ -44,7 +44,7 @@ Download, read, then run. Reading a script before piping it to a root shell is
 a good habit:
 
 ```sh
-curl -sLO https://raw.githubusercontent.com/T4n-Labs/repo-t4nos/main/setup.sh
+curl -fsSLO https://repo.t4nlabs.web.id/setup.sh
 less setup.sh
 sudo sh setup.sh
 ```
@@ -52,7 +52,7 @@ sudo sh setup.sh
 One-liner, if you prefer:
 
 ```sh
-curl -sL https://raw.githubusercontent.com/T4n-Labs/repo-t4nos/main/setup.sh | sudo sh
+curl -fsSL https://repo.t4nlabs.web.id/setup.sh | sudo sh
 ```
 
 The script detects your architecture **and libc**, writes one configuration
@@ -79,6 +79,8 @@ Do you want to import this public key? [Y/n]
 ```
 
 > The prompt wording may differ between XBPS versions; what must match is the `Fingerprint` line.
+
+Current official fingerprint: `63:35:0c:65:0d:a5:f1:87:52:7e:c5:e9:13:3a:d6:2a` (signer `T4n Labs`; the same key for every tag).
 
 Answer `yes` **only** if the fingerprint matches the one published in the
 [repository README](https://github.com/T4n-Labs/repo-t4nos) and on the website.
