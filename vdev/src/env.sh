@@ -36,20 +36,31 @@ cmd_sync(){
 
 tpl_stage(){ rm -rf "$VP/srcpkgs/$1"; cp -a "$TPL/$1" "$VP/srcpkgs/$1"; }
 
-# native tanpa flag; i686 di x86_64 pakai -A; libc beda pakai -A host-musl; sisanya -a
-# Argumen = ARSITEKTUR, bukan path template.
+# flags_for <arsitektur-target>
+#   -A = masterdir/host, -a = target cross (STRING PENUH, termasuk -musl)
 flags_for(){
-    local target="$1" hb="${HOST_ARCH%-musl}" tb hl=glibc tl=glibc f=()
+    local target="$1"
     in_list "${ALL[*]}" "$target" || die "flags_for: '$target' bukan arsitektur valid"
-    tb="${target%-musl}"
+
+    local hb="${HOST_ARCH%-musl}" tb="${target%-musl}"
+    local hl=glibc tl=glibc hm f=()
     if [[ $HOST_ARCH == *-musl ]]; then hl=musl; fi
-    if [[ $target   == *-musl ]]; then tl=musl; fi
-    if [ "$tb" = i686 ] && [ "$hb" = x86_64 ] && [ "$hl" = "$tl" ]; then
-        f+=(-A i686)
+    if [[ $target    == *-musl ]]; then tl=musl; fi
+    # masterdir host dengan libc target. glibc TIDAK punya suffix.
+    hm="$hb"
+    if [ "$tl" = musl ]; then hm="${hb}-musl"; fi
+
+    if [ "$target" = "$HOST_ARCH" ]; then
+        :                                       # identik → native, tanpa flag
+    elif [ "$tb" = "$hb" ]; then
+        f+=(-A "$target")                       # base sama, libc beda
+    elif [ "$tb" = i686 ] && [ "$hb" = x86_64 ] && [ "$hl" = "$tl" ]; then
+        f+=(-A i686)                            # native 32-bit (cara resmi Void)
     else
-        if [ "$hl" != "$tl" ]; then f+=(-A "${hb}-${tl}"); fi
-        if [ "$tb" != "$hb" ]; then f+=(-a "$tb"); fi
+        if [ "$hl" != "$tl" ]; then f+=(-A "$hm"); fi
+        f+=(-a "$target")                       # PENUH: armv6l-musl, bukan armv6l
     fi
+
     if [ ${#f[@]} -gt 0 ]; then printf '%s\n' "${f[@]}"; fi
     return 0
 }

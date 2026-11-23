@@ -1,6 +1,7 @@
 # Menu arsitektur PER PAKET, difilter sesuai archs template.
 # Nomor tetap: [1]..[9] mengikuti urutan ALL, [10] = all.
 # Semua tampilan ke stderr; HANYA pilihan akhir ke stdout.
+
 menu_arch(){
     local pkg="$1" sup=() i a n def ch out=""
     mapfile -t sup < <(tpl_supported "$pkg")
@@ -39,14 +40,29 @@ menu_arch(){
     printf '%s\n' $out
 }
 
+build_summary(){
+    local pkg="$1" okl="$2" badl="$3" nok nbad
+    nok=$(printf '%s' "$okl" | wc -w)
+    nbad=$(printf '%s' "$badl" | wc -w)
+    printf '\n' >&2
+    printf '=== %s ===\n' "$pkg" >&2
+    printf "${G}[+]${N} Success : %d Archs\n" "$nok" >&2
+    printf "${G}[+]${N} %s\n" "${okl:-None}" >&2
+    printf "${R}[-]${N} Failed : %d Archs\n" "$nbad" >&2
+    printf "${R}[-]${N} %s\n" "${badl:-None}" >&2
+}
+
 cmd_build(){
     local pkgs=() req=() p r pkg t sup want targets x f
+    local okl="" badl="" noarch=0 rc=0
+
     while [ $# -gt 0 ]; do
         case "$1" in
             -a|--arch) shift; while [ $# -gt 0 ] && [[ $1 != -* ]]; do req+=("$1"); shift; done ;;
             *) pkgs+=("$1"); shift ;;
         esac
     done
+
     if [ ${#pkgs[@]} -eq 0 ]; then
         info "Template tersedia:"
         ls -1 "$TPL" | sed 's/^/    /' >&2
@@ -85,16 +101,29 @@ cmd_build(){
         info "$pkg dibuild : ${targets[*]}"
         tpl_stage "$pkg"
 
+        okl=""; badl=""; noarch=0
+        if tpl_is_noarch "$pkg"; then
+            noarch=1
+            info "$pkg noarch — satu build untuk ${#targets[@]} tag"
+        fi
+
         for x in "${targets[@]}"; do
-            if tpl_is_noarch "$pkg" && [ "$x" != "${targets[0]}" ]; then
-                info "$pkg noarch — cukup sekali build"
-                continue
-            fi
+            if [ "$noarch" = 1 ] && [ "$x" != "${targets[0]}" ]; then continue; fi
             f=()
             mapfile -t f < <(flags_for "$x")
             info "Building: xbps-src ${f[*]:-} pkg $pkg  ($x)"
-            (cd "$VP" && ./xbps-src ${f[@]+"${f[@]}"} pkg "$pkg") || die "gagal: $pkg $x"
-            ok "$pkg $x → $VP/hostdir/binpkgs/"
+            if (cd "$VP" && ./xbps-src ${f[@]+"${f[@]}"} pkg "$pkg"); then
+                ok "$pkg $x → $VP/hostdir/binpkgs/"
+                if [ "$noarch" = 1 ]; then okl="${targets[*]}"; else okl="$okl $x"; fi
+            else
+                err "gagal: $pkg $x — lanjut ke arsitektur berikutnya"
+                if [ "$noarch" = 1 ]; then badl="${targets[*]}"; else badl="$badl $x"; fi
+                rc=1
+            fi
         done
+
+        build_summary "$pkg" "${okl# }" "${badl# }"
     done
+
+    return $rc
 }
