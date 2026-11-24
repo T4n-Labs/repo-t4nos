@@ -7,8 +7,8 @@ route_tags(){ # filename arch supported[] → tag tujuan
 
 cmd_upload(){
     need gh
-    local pkgs=("$@") p
-    if [ ${#pkgs[@]} -eq 0 ]; then read -rp "[+] Package Name (pisah spasi): " p; pkgs=($p); fi
+    local pkgs=("$@")
+    if [ ${#pkgs[@]} -eq 0 ]; then mapfile -t pkgs < <(menu_pkg); fi
     [ ${#pkgs[@]} -gt 0 ] || die "tidak ada package"
 
     local can_push; can_push=$(gh api "repos/$GH_REPO" --jq '.permissions.push' 2>/dev/null || echo false)

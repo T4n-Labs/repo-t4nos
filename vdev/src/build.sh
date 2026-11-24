@@ -1,6 +1,72 @@
-# Menu arsitektur PER PAKET, difilter sesuai archs template.
-# Nomor tetap: [1]..[9] mengikuti urutan ALL, [10] = all.
-# Semua tampilan ke stderr; HANYA pilihan akhir ke stdout.
+# Menu paket dan arsitektur. Semua tampilan ke STDERR; hanya pilihan ke STDOUT.
+# Nomor paket bersifat GLOBAL lintas halaman, jadi bisa langsung diketik.
+
+menu_pkg(){
+    local per=18 cols=3
+    local all=() d
+    [ -d "$TPL" ] || die "folder template tidak ada: $TPL"
+    for d in "$TPL"/*/; do
+        [ -f "$d/template" ] || continue
+        all+=("$(basename "$d")")
+    done
+    local total=${#all[@]}
+    [ "$total" -gt 0 ] || die "tidak ada template di $TPL"
+
+    local pages=$(( (total + per - 1) / per )) page=0
+    local start count rows r c li gi colw maxlen cell ans tok sel out
+
+    while :; do
+        start=$(( page * per ))
+        count=$(( total - start ))
+        [ "$count" -le "$per" ] || count=$per
+        rows=$(( (count + cols - 1) / cols ))
+
+        maxlen=0
+        for (( li=0; li<count; li++ )); do
+            [ ${#all[$((start+li))]} -le "$maxlen" ] || maxlen=${#all[$((start+li))]}
+        done
+        colw=$(( maxlen + 8 ))
+
+        printf '[+] Template: %d total — halaman %d/%d\n' \
+            "$total" "$((page+1))" "$pages" >&2
+        for (( r=0; r<rows; r++ )); do
+            for (( c=0; c<cols; c++ )); do
+                li=$(( c * rows + r ))
+                [ "$li" -lt "$count" ] || continue
+                gi=$(( start + li ))
+                cell="[$((gi+1))] ${all[$gi]}"
+                printf '%-*s' "$colw" "$cell" >&2
+            done
+            printf '\n' >&2
+        done
+
+        read -rp "[?] Nomor (pisah spasi) / nama paket / n p q: " ans
+        case "$ans" in
+            q|Q) die "dibatalkan" ;;
+            n|N) page=$(( (page + 1) % pages )); continue ;;
+            p|P) page=$(( (page - 1 + pages) % pages )); continue ;;
+            "")  die "tidak ada package dipilih" ;;
+        esac
+
+        out=""
+        for tok in $ans; do
+            if [[ $tok =~ ^[0-9]+$ ]]; then
+                if [ "$tok" -ge 1 ] && [ "$tok" -le "$total" ]; then
+                    sel="${all[$((tok-1))]}"
+                else
+                    warn "nomor $tok di luar rentang 1..$total"; continue
+                fi
+            elif [ -f "$TPL/$tok/template" ]; then
+                sel="$tok"
+            else
+                warn "tidak ada template: $tok"; continue
+            fi
+            in_list "$out" "$sel" || out="$out $sel"
+        done
+        if [ -n "$out" ]; then printf '%s\n' $out; return 0; fi
+        warn "tidak ada pilihan valid, ulangi"
+    done
+}
 
 menu_arch(){
     local pkg="$1" sup=() i a n def ch out=""
@@ -53,7 +119,7 @@ build_summary(){
 }
 
 cmd_build(){
-    local pkgs=() req=() p r pkg t sup want targets x f
+    local pkgs=() req=() r pkg t sup want targets x f
     local okl="" badl="" noarch=0 rc=0
 
     while [ $# -gt 0 ]; do
@@ -63,12 +129,7 @@ cmd_build(){
         esac
     done
 
-    if [ ${#pkgs[@]} -eq 0 ]; then
-        info "Template tersedia:"
-        ls -1 "$TPL" | sed 's/^/    /' >&2
-        read -rp "[+] Package Name (pisah spasi): " p
-        pkgs=($p)
-    fi
+    if [ ${#pkgs[@]} -eq 0 ]; then mapfile -t pkgs < <(menu_pkg); fi
     [ ${#pkgs[@]} -gt 0 ] || die "tidak ada package"
 
     cmd_setup
