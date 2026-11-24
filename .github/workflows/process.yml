@@ -105,13 +105,20 @@ jobs:
           xbps-install -y bash git tar bsdtar python3 github-cli curl jq zstd
       - uses: actions/checkout@v4
       - name: Ambil repodata + daftar asset
-        shell: bash
+        shell: bash          # container Void: tanpa ini `run` memakai sh (tidak kenal pipefail)
         env:
-           GH_TOKEN: ${{ github.token }}
-           GH_REPO: ${{ github.repository }}
-           TAG: ${{ matrix.tag }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ matrix.tag }}
         run: |
-           set -euo pipefail
+          set -euo pipefail
+          rid=$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq .id)
+          gh api --paginate "repos/$GH_REPO/releases/$rid/assets" > assets.pages
+          jq -s 'add // []' assets.pages > assets.json
+          if gh release download "$TAG" -p "$TAG-repodata" -D . --clobber 2>/dev/null; then
+            bsdtar -xOf "$TAG-repodata" index.plist > index.plist 2>/dev/null \
+              || tar --zstd -xOf "$TAG-repodata" index.plist > index.plist
+          fi
       - name: Generate packages.json
         env:
           TAG: ${{ matrix.tag }}
