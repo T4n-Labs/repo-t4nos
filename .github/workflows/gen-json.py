@@ -6,7 +6,6 @@ import fnmatch, json, os, pathlib, plistlib, re
 TAG = os.environ["TAG"]
 ALL = ("x86_64 x86_64-musl aarch64 aarch64-musl armv6l armv6l-musl "
        "armv7l armv7l-musl i686").split()
-BASE = "https://repo.t4nlabs.web.id"
 TPL = pathlib.Path("pkg-template")
 
 
@@ -51,6 +50,7 @@ if TPL.is_dir():
             "homepage": field(t, "homepage"),
             "maintainer": field(t, "maintainer"),
             "distributor": field(t, "distributor"),
+            "license": field(t, "license"),
         }
 
 assets = []
@@ -80,16 +80,13 @@ for pr in props:
         "version": (pr.get("version") or "").rsplit("_", 1)[0],
         "arch": TAG,
         "archs": tpl.get("archs", [TAG]),
-        "filename": fn,
-        "size": sizes.get(fn),
-        "status": "ready",
-        "description": desc,
+        "size": sizes.get(fn),          # byte, ukuran asset .xbps di release
+        "category": "xbps",             # biner sudah ada di tag ini
         "desc": desc,
         "homepage": pr.get("homepage") or tpl.get("homepage", ""),
         "maintainer": pr.get("maintainer") or tpl.get("maintainer", ""),
         "distributor": tpl.get("distributor", ""),
-        "license": pr.get("license", ""),
-        "url": f"{BASE}/{TAG}/{fn}",
+        "license": pr.get("license") or tpl.get("license", ""),
     })
     seen.add(name)
 
@@ -98,10 +95,10 @@ for name, t in templates.items():
         continue
     out.append({
         "name": name, "version": t["version"], "arch": TAG, "archs": t["archs"],
-        "filename": None, "size": None, "status": "recipe",
-        "description": t["description"], "desc": t["description"],
+        "size": None, "category": "template",   # template saja, biner belum dibangun
+        "desc": t["description"],
         "homepage": t["homepage"], "maintainer": t["maintainer"],
-        "distributor": t["distributor"], "license": "", "url": None,
+        "distributor": t["distributor"], "license": t["license"],
     })
 
 out.sort(key=lambda e: e["name"])
@@ -109,5 +106,5 @@ dst = pathlib.Path("json") / TAG
 dst.mkdir(parents=True, exist_ok=True)
 (dst / "packages.json").write_text(json.dumps(out, indent=2, ensure_ascii=False) + "\n")
 
-ready = sum(1 for e in out if e["status"] == "ready")
-print(f"✓ json/{TAG}/packages.json: {len(out)} entri ({ready} ready, {len(out)-ready} recipe)")
+n_xbps = sum(1 for e in out if e["category"] == "xbps")
+print(f"✓ json/{TAG}/packages.json: {len(out)} entri ({n_xbps} xbps, {len(out)-n_xbps} template)")
