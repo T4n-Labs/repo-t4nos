@@ -9,16 +9,13 @@
       "aarch64",
       "aarch64-musl"
     ],
-    "filename": null,
     "size": null,
-    "status": "recipe",
-    "description": "Integrated platform for performing security testing of web applications",
+    "category": "template",
     "desc": "Integrated platform for performing security testing of web applications",
     "homepage": "https://portswigger.net/burp",
     "maintainer": "gh0st4n <darskevoid@gmail.com>",
     "distributor": "gh0st4n <darskevoid@gmail.com>",
-    "license": "",
-    "url": null
+    "license": "custom:Proprietary"
   },
   {
     "name": "calamares",
@@ -27,16 +24,13 @@
     "archs": [
       "x86_64"
     ],
-    "filename": null,
     "size": null,
-    "status": "recipe",
-    "description": "Distribution-independent installer framework",
+    "category": "template",
     "desc": "Distribution-independent installer framework",
     "homepage": "https://calamares.io",
     "maintainer": "Naz <ndpm13@ch-naseem.com>",
     "distributor": "Gh0sT4n <darskevoid@gmail.com>",
-    "license": "",
-    "url": null
+    "license": "BSD-2-Clause, CC-BY-4.0, CC0-1.0, GPL-3.0-or-later, LGPL-2.1-only, LGPL-3.0-or-later, MIT"
   },
   {
     "name": "letx",
@@ -53,16 +47,13 @@
       "armv7l-musl",
       "i686"
     ],
-    "filename": null,
     "size": null,
-    "status": "recipe",
-    "description": "CLI Tools - VUR Helper",
+    "category": "template",
     "desc": "CLI Tools - VUR Helper",
     "homepage": "https://github.com/gh0st4n/Let-X",
     "maintainer": "Gh0sT4n <darskevoid@gmail.com>",
     "distributor": "",
-    "license": "",
-    "url": null
+    "license": "GPL-3.0"
   },
   {
     "name": "metasploit",
@@ -72,16 +63,13 @@
       "x86_64",
       "aarch64"
     ],
-    "filename": null,
     "size": null,
-    "status": "recipe",
-    "description": "Penetration testing framework for developing and using exploit code",
+    "category": "template",
     "desc": "Penetration testing framework for developing and using exploit code",
     "homepage": "https://www.metasploit.com",
     "maintainer": "gh0st4n <darskevoid@gmail.com>",
     "distributor": "gh0st4n <darskevoid@gmail.com>",
-    "license": "",
-    "url": null
+    "license": "BSD-3-Clause"
   },
   {
     "name": "radare2",
@@ -98,16 +86,13 @@
       "armv7l-musl",
       "i686"
     ],
-    "filename": null,
     "size": null,
-    "status": "recipe",
-    "description": "Advanced command line debugger and hexadecimal editor",
+    "category": "template",
     "desc": "Advanced command line debugger and hexadecimal editor",
     "homepage": "https://www.radare.org",
     "maintainer": "gh0st4n <darskevoid@gmail.com>",
     "distributor": "gh0st4n <darskevoid@gmail.com>",
-    "license": "",
-    "url": null
+    "license": "LGPL-3.0-only"
   },
   {
     "name": "tpkg",
@@ -124,16 +109,13 @@
       "armv7l-musl",
       "i686"
     ],
-    "filename": null,
     "size": null,
-    "status": "recipe",
-    "description": "A user-friendly package manager wrapper for XBPS",
+    "category": "template",
     "desc": "A user-friendly package manager wrapper for XBPS",
     "homepage": "https://gitlab.com/t4n-pkg/tpkg/",
     "maintainer": "Gh0sT4n <darskevoid@gmail.com>",
     "distributor": "Gh0sT4n <darskevoid@gmail.com>",
-    "license": "",
-    "url": null
+    "license": "BSD-2-Clause"
   },
   {
     "name": "zvc",
@@ -150,15 +132,12 @@
       "armv7l-musl",
       "i686"
     ],
-    "filename": null,
     "size": null,
-    "status": "recipe",
-    "description": "Simple Script for Zig Version Control written shell(POSIX-sh)",
+    "category": "template",
     "desc": "Simple Script for Zig Version Control written shell(POSIX-sh)",
     "homepage": "https://github.com/gh0st4n/ZVC/README.md",
     "maintainer": "Gh0sT4n <darskevoid@gmail.com>",
     "distributor": "",
-    "license": "",
-    "url": null
+    "license": "MIT"
   }
 ]

@@ -14,16 +14,13 @@
       "armv7l-musl",
       "i686"
     ],
-    "filename": null,
     "size": null,
-    "status": "recipe",
-    "description": "CLI Tools - VUR Helper",
+    "category": "template",
     "desc": "CLI Tools - VUR Helper",
     "homepage": "https://github.com/gh0st4n/Let-X",
     "maintainer": "Gh0sT4n <darskevoid@gmail.com>",
     "distributor": "",
-    "license": "",
-    "url": null
+    "license": "GPL-3.0"
   },
   {
     "name": "radare2",
@@ -40,16 +37,13 @@
       "armv7l-musl",
       "i686"
     ],
-    "filename": null,
     "size": null,
-    "status": "recipe",
-    "description": "Advanced command line debugger and hexadecimal editor",
+    "category": "template",
     "desc": "Advanced command line debugger and hexadecimal editor",
     "homepage": "https://www.radare.org",
     "maintainer": "gh0st4n <darskevoid@gmail.com>",
     "distributor": "gh0st4n <darskevoid@gmail.com>",
-    "license": "",
-    "url": null
+    "license": "LGPL-3.0-only"
   },
   {
     "name": "tpkg",
@@ -66,16 +60,13 @@
       "armv7l-musl",
       "i686"
     ],
-    "filename": null,
     "size": null,
-    "status": "recipe",
-    "description": "A user-friendly package manager wrapper for XBPS",
+    "category": "template",
     "desc": "A user-friendly package manager wrapper for XBPS",
     "homepage": "https://gitlab.com/t4n-pkg/tpkg/",
     "maintainer": "Gh0sT4n <darskevoid@gmail.com>",
     "distributor": "Gh0sT4n <darskevoid@gmail.com>",
-    "license": "",
-    "url": null
+    "license": "BSD-2-Clause"
   },
   {
     "name": "zvc",
@@ -92,15 +83,12 @@
       "armv7l-musl",
       "i686"
     ],
-    "filename": null,
     "size": null,
-    "status": "recipe",
-    "description": "Simple Script for Zig Version Control written shell(POSIX-sh)",
+    "category": "template",
     "desc": "Simple Script for Zig Version Control written shell(POSIX-sh)",
     "homepage": "https://github.com/gh0st4n/ZVC/README.md",
     "maintainer": "Gh0sT4n <darskevoid@gmail.com>",
     "distributor": "",
-    "license": "",
-    "url": null
+    "license": "MIT"
   }
 ]
