@@ -63,7 +63,11 @@ p = pathlib.Path("index.plist")
 if p.is_file():
     idx = plistlib.loads(p.read_bytes())
     if isinstance(idx, dict):
-        props = [v for v in idx.values() if isinstance(v, dict) and "pkgname" in v]
+        for key, v in idx.items():
+            if isinstance(v, dict):
+                props.append({**v, "pkgname": v.get("pkgname") or key})
+print(f"  index.plist: {'ada' if p.is_file() else 'TIDAK ADA'}, {len(props)} paket; "
+      f"assets.json: {len(assets)} asset")
 
 out, seen = [], set()
 for pr in props:
@@ -75,12 +79,15 @@ for pr in props:
         fn = f"{pv}.noarch.xbps"
     tpl = templates.get(name, {})
     desc = pr.get("short_desc") or tpl.get("description", "")
+    size = sizes.get(fn)
+    if size is None:
+        size = pr.get("filename-size")   # cadangan: ukuran dari indeks repodata
     out.append({
         "name": name,
         "version": (pr.get("version") or "").rsplit("_", 1)[0],
         "arch": TAG,
         "archs": tpl.get("archs", [TAG]),
-        "size": sizes.get(fn),          # byte, ukuran asset .xbps di release
+        "size": size,                   # byte, ukuran file .xbps (asset release)
         "category": "xbps",             # biner sudah ada di tag ini
         "desc": desc,
         "homepage": pr.get("homepage") or tpl.get("homepage", ""),
