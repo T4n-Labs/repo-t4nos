@@ -106,7 +106,7 @@
     "desc": "Simple Script for Zig Version Control written shell(POSIX-sh)",
     "homepage": "https://github.com/gh0st4n/ZVC/README.md",
     "maintainer": "Gh0sT4n <darskevoid@gmail.com>",
-    "distributor": "",
+    "distributor": "Gh0sT4n <darskevoid@gmail.com>",
     "license": "MIT"
   }
 ]
