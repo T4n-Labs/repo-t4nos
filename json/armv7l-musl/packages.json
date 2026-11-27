@@ -14,8 +14,8 @@
       "armv7l-musl",
       "i686"
     ],
-    "size": null,
-    "category": "template",
+    "size": 22262,
+    "category": "xbps",
     "desc": "CLI Tools - VUR Helper",
     "homepage": "https://github.com/gh0st4n/Let-X",
     "maintainer": "Gh0sT4n <darskevoid@gmail.com>",
@@ -60,8 +60,8 @@
       "armv7l-musl",
       "i686"
     ],
-    "size": null,
-    "category": "template",
+    "size": 18366,
+    "category": "xbps",
     "desc": "A user-friendly package manager wrapper for XBPS",
     "homepage": "https://gitlab.com/t4n-pkg/tpkg/",
     "maintainer": "Gh0sT4n <darskevoid@gmail.com>",

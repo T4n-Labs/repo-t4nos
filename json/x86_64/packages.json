@@ -47,8 +47,8 @@
       "armv7l-musl",
       "i686"
     ],
-    "size": null,
-    "category": "template",
+    "size": 22259,
+    "category": "xbps",
     "desc": "CLI Tools - VUR Helper",
     "homepage": "https://github.com/gh0st4n/Let-X",
     "maintainer": "Gh0sT4n <darskevoid@gmail.com>",
@@ -96,7 +96,7 @@
   },
   {
     "name": "tpkg",
-    "version": "",
+    "version": "1.1.0",
     "arch": "x86_64",
     "archs": [
       "x86_64",
