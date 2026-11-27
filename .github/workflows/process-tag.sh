@@ -1,7 +1,21 @@
 #!/usr/bin/env bash
 # Proses satu tag: inventory → rencana → verifikasi → index+sign → upload → prune (TERAKHIR).
 # Job ini memegang SIGN_KEY: DILARANG membaca/men-source template apa pun.
+#
+# Rencana (urutan penting):
+#   1. Untuk tiap nama paket, telusuri kandidat dari versi tertinggi ke terendah.
+#      - kandidat yang .sig2-nya ada DAN tidak lebih tua dari .xbps = "tepercaya"
+#        (sudah pernah diverifikasi + ditandatangani CI) → langsung dipilih;
+#      - selain itu (belum punya .sig2, atau .xbps lebih baru dari .sig2 karena
+#        di-upload ulang dengan nama sama) → diunduh dan diverifikasi props.plist;
+#        yang gagal DITOLAK dan DIBIARKAN (tidak dihapus), penelusuran lanjut ke
+#        versi di bawahnya.
+#   2. prune = kandidat di bawah versi terpilih, HANYA untuk nama yang punya versi
+#      lolos verifikasi. Versi lama yang valid tidak pernah dihapus karena versi
+#      baru gagal verifikasi.
+#   3. Index + sign → upload repodata + .sig2 baru DULU → baru prune (Invarian 4).
 set -euo pipefail
+export LC_ALL=C
 : "${TAG:?}"; : "${SIGN_KEY:?}"; : "${GH_REPO:?}"
 SIGNEDBY="${SIGNEDBY:-T4n Labs}"
 
@@ -25,11 +39,26 @@ ver_gt() {
   [ "$o/$r" = "$gt_out/$gt_rc" ]
 }
 
-# ── inventory (paginated: aman untuk >100 asset) ──
+# ── inventory (paginated: aman untuk >100 asset) — nama + updated_at ──
 rid=$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq .id)
-gh api --paginate "repos/$GH_REPO/releases/$rid/assets" --jq '.[].name' > "$WORK/assets"
+gh api --paginate "repos/$GH_REPO/releases/$rid/assets" \
+  --jq '.[] | [.name, .updated_at] | @tsv' > "$WORK/assets.tsv"
+cut -f1 "$WORK/assets.tsv" > "$WORK/assets"
+declare -A ts=()
+while IFS=$'\t' read -r n t; do
+  [[ "$n" =~ ^[A-Za-z0-9._+-]+$ ]] || continue     # kunci array hanya nama aman
+  ts["$n"]="$t"
+done < "$WORK/assets.tsv"
 has_repodata=no
 if grep -qxF "$TAG-repodata" "$WORK/assets"; then has_repodata=yes; fi
+
+# .sig2 "segar": ada, dan TIDAK lebih tua dari .xbps-nya (timestamp ISO-8601 UTC,
+# urut leksikografis). .xbps yang di-upload ulang (--clobber) lebih baru dari
+# .sig2 lamanya → tanda tangan basi → harus ditandatangani ulang.
+fresh_sig() {
+  local x="${ts["$1"]:-}" s="${ts["$1.sig2"]:-}"
+  [ -n "$x" ] && [ -n "$s" ] && ! [[ "$s" < "$x" ]]
+}
 
 : > "$WORK/xbps"
 while IFS= read -r fn; do
@@ -48,69 +77,75 @@ while IFS= read -r fn; do
   printf '%s\t%s\t%s\n' "$name" "$pkgver" "$fn" >> "$WORK/xbps"
 done < "$WORK/assets"
 
-# ── rencana: keep versi tertinggi per nama, sisanya prune ──
-: > "$WORK/keep"; : > "$WORK/prune"
-for name in $(cut -f1 "$WORK/xbps" | sort -u); do
-  best=""
-  while IFS=$'\t' read -r n pv fn; do
-    [ "$n" = "$name" ] || continue
-    if [ -z "$best" ] || ver_gt "$pv" "$best"; then best="$pv"; fi
-  done < "$WORK/xbps"
-  # tie-break pkgver sama: arch-specific menang atas noarch
-  chosen=""
-  for f in $(awk -F'\t' -v n="$name" -v pv="$best" '$1==n && $2==pv {print $3}' "$WORK/xbps"); do
-    case "$f" in *".$TAG.xbps") chosen="$f"; break ;; esac
-  done
-  if [ -z "$chosen" ]; then
-    chosen=$(awk -F'\t' -v n="$name" -v pv="$best" '$1==n && $2==pv {print $3; exit}' "$WORK/xbps")
-  fi
-  printf '%s\n' "$chosen" >> "$WORK/keep"
-  awk -F'\t' -v n="$name" '$1==n {print $3}' "$WORK/xbps" \
-    | grep -vxF "$chosen" >> "$WORK/prune" || true
-done
-
-: > "$WORK/unsigned"
+# .sig2 yatim: pasangan .xbps-nya sudah tidak ada di release. Dihapus PALING
+# TERAKHIR (bersama prune), tidak pernah memengaruhi indeks.
+: > "$WORK/orphans"
 while IFS= read -r fn; do
-  grep -qxF "$fn.sig2" "$WORK/assets" || printf '%s\n' "$fn" >> "$WORK/unsigned"
-done < "$WORK/keep"
+  case "$fn" in *.xbps.sig2) ;; *) continue ;; esac
+  grep -qxF "${fn%.sig2}" "$WORK/assets" || printf '%s\n' "$fn" >> "$WORK/orphans"
+done < "$WORK/assets"
 
-echo "==> $TAG: keep=$(wc -l < "$WORK/keep") unsigned=$(wc -l < "$WORK/unsigned") prune=$(wc -l < "$WORK/prune")"
-
-if [ ! -s "$WORK/unsigned" ] && [ ! -s "$WORK/prune" ] && [ "$has_repodata" = yes ]; then
-  echo "==> $TAG: tidak ada yang perlu diproses"; exit 0
-fi
-
-# tag jadi kosong: hapus prune + repodata lama, jangan tinggalkan indeks yatim
-if [ ! -s "$WORK/keep" ]; then
+delete_orphans() {
+  local fn
   while IFS= read -r fn; do
+    echo "  hapus .sig2 yatim: $fn"
     gh release delete-asset "$TAG" "$fn" -y || true
-    if grep -qxF "$fn.sig2" "$WORK/assets"; then
-      gh release delete-asset "$TAG" "$fn.sig2" -y || true
+  done < "$WORK/orphans"
+}
+
+# ── tag tanpa satu pun .xbps: jangan tinggalkan indeks/.sig2 yatim ──
+if [ ! -s "$WORK/xbps" ]; then
+  if [ -s "$WORK/orphans" ] || [ "$has_repodata" = yes ]; then
+    delete_orphans
+    if [ "$has_repodata" = yes ]; then
+      gh release delete-asset "$TAG" "$TAG-repodata" -y || true
+      echo "::warning::$TAG: kini kosong (repodata dihapus)"
     fi
-  done < "$WORK/prune"
-  if [ "$has_repodata" = yes ]; then
-    gh release delete-asset "$TAG" "$TAG-repodata" -y || true
+  else
+    echo "==> $TAG: kosong, tidak ada yang dilakukan"
   fi
-  echo "::warning::$TAG: kini kosong (repodata dihapus)"
   exit 0
 fi
 
-# ── unduh yang di-keep ke folder kerja KOSONG ──
+# kandidat satu nama paket, urut versi menurun; pkgver sama → arch-spesifik dulu
+sorted_candidates() {
+  local name="$1" n pv fn i best cnt picked=0
+  local -a pvs=() fns=()
+  local -A used=()
+  while IFS=$'\t' read -r n pv fn; do
+    [ "$n" = "$name" ] || continue
+    pvs+=("$pv"); fns+=("$fn")
+  done < "$WORK/xbps"
+  cnt=${#fns[@]}
+  while [ "$picked" -lt "$cnt" ]; do
+    best=-1
+    for ((i = 0; i < cnt; i++)); do
+      [ -z "${used[$i]:-}" ] || continue
+      if [ "$best" -lt 0 ]; then best=$i; continue; fi
+      if ver_gt "${pvs[$i]}" "${pvs[$best]}"; then
+        best=$i
+      elif [ "${pvs[$i]}" = "${pvs[$best]}" ] \
+           && [[ "${fns[$i]}" == *".$TAG.xbps" ]] && [[ "${fns[$best]}" != *".$TAG.xbps" ]]; then
+        best=$i
+      fi
+    done
+    used[$best]=1; picked=$((picked + 1))
+    printf '%s\n' "${fns[$best]}"
+  done
+}
+
 mkdir -p "$WORK/repo"
-while IFS= read -r fn; do
-  gh release download "$TAG" -p "$fn" -D "$WORK/repo" --clobber
-done < "$WORK/keep"
+download_one() { gh release download "$TAG" -p "$1" -D "$WORK/repo" --clobber; }
 
 # ── verifikasi nama: asset harus persis <pkgver>.<architecture>.xbps ──
 # GitHub me-rename karakter tertentu (terbukti: '~' → '.'). Hasil rename bisa
 # lolos charset check, tapi bikin client 404. Baca props.plist = parsing data,
 # bukan eksekusi kode — tetap aman untuk job pemegang secret.
-: > "$WORK/verified"
-while IFS= read -r fn; do
-  f="$WORK/repo/$fn"
+verify_one() {
+  local fn="$1" f="$WORK/repo/$1" want
   if ! bsdtar -xOf "$f" props.plist > "$WORK/props.plist" 2>/dev/null; then
     echo "::error::$TAG: props.plist tidak terbaca (bukan paket xbps valid?): $fn"
-    rm -f "$f"; continue
+    rm -f "$f"; return 1
   fi
   want=$(python3 - "$WORK/props.plist" <<'PY'
 import plistlib, sys
@@ -120,19 +155,75 @@ PY
 )
   if [ "$fn" != "$want" ]; then
     echo "::error::$TAG: nama asset '$fn' != isi paket '$want' (GitHub rename?) — DITOLAK"
-    rm -f "$f"; continue
+    rm -f "$f"; return 1
   fi
-  printf '%s\n' "$fn" >> "$WORK/verified"
-done < "$WORK/keep"
+  return 0
+}
 
-if [ ! -s "$WORK/verified" ]; then
+# ── rencana + verifikasi kandidat yang belum tepercaya ──
+: > "$WORK/chosen"      # satu .xbps per nama paket
+: > "$WORK/prune_map"   # <terpilih>\t<kandidat di bawahnya>
+: > "$WORK/rejected"
+for name in $(cut -f1 "$WORK/xbps" | sort -u); do
+  mapfile -t cands < <(sorted_candidates "$name")
+  pick=""; idx=-1
+  for i in "${!cands[@]}"; do
+    fn="${cands[$i]}"
+    if fresh_sig "$fn"; then pick="$fn"; idx=$i; break; fi
+    download_one "$fn"
+    if verify_one "$fn"; then pick="$fn"; idx=$i; break; fi
+    printf '%s\n' "$fn" >> "$WORK/rejected"
+  done
+  if [ -z "$pick" ]; then
+    echo "::warning::$TAG: $name: tidak ada versi lolos verifikasi — semua berkas dibiarkan (tidak ada prune)"
+    continue
+  fi
+  printf '%s\n' "$pick" >> "$WORK/chosen"
+  for ((j = idx + 1; j < ${#cands[@]}; j++)); do
+    printf '%s\t%s\n' "$pick" "${cands[$j]}" >> "$WORK/prune_map"
+  done
+done
+
+if [ ! -s "$WORK/chosen" ]; then
   echo "::error::$TAG: tidak ada paket lolos verifikasi"; exit 1
 fi
-# unsigned difilter ke yang lolos verifikasi saja
-if [ -s "$WORK/unsigned" ]; then
-  grep -xF -f "$WORK/verified" "$WORK/unsigned" > "$WORK/unsigned.ok" || true
-  mv "$WORK/unsigned.ok" "$WORK/unsigned"
+
+# unsigned = terpilih yang .sig2-nya belum ada ATAU sudah basi (.xbps lebih baru)
+: > "$WORK/unsigned"
+while IFS= read -r fn; do
+  fresh_sig "$fn" || printf '%s\n' "$fn" >> "$WORK/unsigned"
+done < "$WORK/chosen"
+
+# repodata lebih tua dari .xbps terpilih mana pun → indeks basi
+repodata_stale=no
+if [ "$has_repodata" = yes ]; then
+  while IFS= read -r fn; do
+    if [[ "${ts["$TAG-repodata"]:-}" < "${ts["$fn"]:-}" ]]; then repodata_stale=yes; break; fi
+  done < "$WORK/chosen"
 fi
+
+echo "==> $TAG: pilih=$(wc -l < "$WORK/chosen") unsigned=$(wc -l < "$WORK/unsigned") prune=$(cut -f2 "$WORK/prune_map" | sort -u | wc -l) ditolak=$(wc -l < "$WORK/rejected") yatim=$(wc -l < "$WORK/orphans")"
+
+if [ ! -s "$WORK/unsigned" ] && [ ! -s "$WORK/prune_map" ] \
+   && [ "$has_repodata" = yes ] && [ "$repodata_stale" = no ]; then
+  delete_orphans
+  echo "==> $TAG: tidak ada yang perlu diproses"; exit 0
+fi
+
+# ── unduh sisa yang dipilih (yang tepercaya belum diunduh) lalu verifikasi ──
+: > "$WORK/verified"
+while IFS= read -r fn; do
+  if [ ! -f "$WORK/repo/$fn" ]; then
+    download_one "$fn"
+    if ! verify_one "$fn"; then
+      # .sig2-nya segar tapi isinya kini tak lolos verifikasi: anomali. Berhenti
+      # sebelum mengubah apa pun (tidak ada upload, tidak ada prune).
+      echo "::error::$TAG: berkas tepercaya gagal verifikasi ulang: $fn — dihentikan tanpa perubahan"
+      exit 1
+    fi
+  fi
+  printf '%s\n' "$fn" >> "$WORK/verified"
+done < "$WORK/chosen"
 
 export XBPS_ARCH="$TAG"
 mapfile -t pkgs < <(sed "s|^|$WORK/repo/|" "$WORK/verified" | sort)
@@ -157,6 +248,8 @@ done < "$WORK/unsigned"
 gh release upload "$TAG" "${up[@]}" --clobber
 
 # ── prune PALING TERAKHIR: client tak pernah lihat indeks nunjuk file hilang ──
+# Hanya kandidat di bawah versi yang SUDAH terverifikasi dan terindeks.
+cut -f2 "$WORK/prune_map" | sort -u > "$WORK/prune"
 while IFS= read -r fn; do
   echo "  prune: $fn"
   gh release delete-asset "$TAG" "$fn" -y || true
@@ -164,5 +257,6 @@ while IFS= read -r fn; do
     gh release delete-asset "$TAG" "$fn.sig2" -y || true
   fi
 done < "$WORK/prune"
+delete_orphans
 
 echo "✓ $TAG selesai ($(wc -l < "$WORK/verified") paket terindeks)"

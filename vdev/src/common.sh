@@ -19,4 +19,8 @@ need(){ command -v "$1" >/dev/null 2>&1 || die "$1 belum terinstal"; }
 # charset nama asset yang aman di GitHub Releases (terverifikasi: '+' aman, '~' tidak)
 name_safe(){ printf '%s' "$1" | grep -qE '^[A-Za-z0-9._+-]+$'; }
 
+# Nama paket untuk operasi path (rm/cp): allowlist name_safe + tidak boleh diawali
+# '.' atau '-' (menolak '.', '..', '.hidden', opsi). Regex name_safe sengaja tidak diubah.
+pkg_safe(){ name_safe "$1" || return 1; case "$1" in .*|-*) return 1 ;; esac; return 0; }
+
 in_list(){ case " $1 " in *" $2 "*) return 0 ;; esac; return 1; }

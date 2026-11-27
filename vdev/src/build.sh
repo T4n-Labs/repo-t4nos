@@ -51,12 +51,13 @@ menu_pkg(){
         out=""
         for tok in $ans; do
             if [[ $tok =~ ^[0-9]+$ ]]; then
-                if [ "$tok" -ge 1 ] && [ "$tok" -le "$total" ]; then
-                    sel="${all[$((tok-1))]}"
+                # 10#: paksa desimal ("08"/"09" bukan oktal); panjang dibatasi cegah overflow
+                if [ ${#tok} -le 6 ] && [ "$((10#$tok))" -ge 1 ] && [ "$((10#$tok))" -le "$total" ]; then
+                    sel="${all[$((10#$tok - 1))]}"
                 else
                     warn "nomor $tok di luar rentang 1..$total"; continue
                 fi
-            elif [ -f "$TPL/$tok/template" ]; then
+            elif pkg_safe "$tok" && [ -f "$TPL/$tok/template" ]; then
                 sel="$tok"
             else
                 warn "tidak ada template: $tok"; continue
@@ -85,12 +86,15 @@ menu_arch(){
     read -rp "[?] Choose (pisah spasi, contoh: 1 3 6) [default: $def]: " ch
     if [ -z "$ch" ]; then printf '%s\n' "$def"; return 0; fi
 
+    local num
     for i in $ch; do
-        if [ "$i" = "$(( ${#ALL[@]} + 1 ))" ] || [ "$i" = all ]; then
+        num=""
+        if [[ "$i" =~ ^[0-9]{1,6}$ ]]; then num=$((10#$i)); fi    # 10#: "08"/"09" bukan oktal
+        if { [ -n "$num" ] && [ "$num" -eq "$(( ${#ALL[@]} + 1 ))" ]; } || [ "$i" = all ]; then
             printf '%s\n' "${sup[@]}"; return 0
         fi
-        if [[ "$i" =~ ^[0-9]+$ ]] && [ "$i" -ge 1 ] && [ "$i" -le ${#ALL[@]} ]; then
-            n="${ALL[$((i-1))]}"
+        if [ -n "$num" ] && [ "$num" -ge 1 ] && [ "$num" -le ${#ALL[@]} ]; then
+            n="${ALL[$((num-1))]}"
             if in_list "${sup[*]}" "$n"; then
                 in_list "$out" "$n" || out="$out $n"
             else
@@ -132,13 +136,15 @@ cmd_build(){
     if [ ${#pkgs[@]} -eq 0 ]; then mapfile -t pkgs < <(menu_pkg); fi
     [ ${#pkgs[@]} -gt 0 ] || die "tidak ada package"
 
+    # Validasi SEMUA nama + template dulu, SEBELUM clone/bootstrap yang berat.
+    for pkg in "${pkgs[@]}"; do
+        pkg_safe "$pkg" || die "nama paket tidak aman (harus [A-Za-z0-9._+-], tidak diawali '.' atau '-'): '$pkg'"
+        [ -f "$TPL/$pkg/template" ] || die "template tidak ada: $TPL/$pkg/template"
+    done
+
     cmd_setup
 
     for pkg in "${pkgs[@]}"; do
-        t="$TPL/$pkg/template"
-        [ -f "$t" ] || die "template tidak ada: $t"
-        name_safe "$pkg" || warn "$pkg: karakter di luar [A-Za-z0-9._+-] — nama asset berisiko di-rename GitHub"
-
         mapfile -t sup < <(tpl_supported "$pkg")
         [ ${#sup[@]} -gt 0 ] || { warn "$pkg: archs kosong setelah ekspansi, skip"; continue; }
 

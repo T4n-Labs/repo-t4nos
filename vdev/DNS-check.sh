@@ -2,8 +2,8 @@
 # Uji https://repo.t4nlabs.web.id tanpa biner xbps. Hanya GET/HEAD/POST ke domain,
 # tidak mengubah apa pun. Jalankan dari mesin mana saja yang punya curl.
 #
-#   bash check-domain.sh                    # uji DNS, TLS, dan perilaku Worker
-#   PROBE=ping.txt bash check-domain.sh     # + uji proxy 200/Range ke file uji di release
+#   bash vdev/DNS-check.sh                  # uji DNS, TLS, dan perilaku Worker
+#   PROBE=ping.txt bash vdev/DNS-check.sh   # + uji proxy 200/Range ke file uji di release
 #
 # Variabel (opsional): BASE WEB GH TAG PROBE
 set -u

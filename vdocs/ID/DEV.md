@@ -6,7 +6,7 @@ menghasilkan paket biner saja. Website ada di repositori terpisah (`repo-site`).
 
 > Sumber kebenaran adalah kode. Kalau dokumen ini dan kode berbeda, kode yang
 > menang lalu dokumen diperbaiki. Hal yang belum dibuktikan keluaran perintah
-> ditandai "belum diverifikasi". Cuplikan status: 24 November 2026 (§12).
+> ditandai "belum diverifikasi". Cuplikan status: 25 November 2026 (§12); klaim sisi GitHub/Cloudflare/website bertanggal 22–24 November dan belum diverifikasi ulang.
 
 ## 1. Aturan Emas
 
@@ -32,21 +32,23 @@ repo-t4nos/
 ├── .github/CODEOWNERS          # BELUM ADA (direncanakan; proteksi ditunda, §12)
 ├── .github/workflows/
 │   ├── process.yml             # satu-satunya workflow YAML (4 job)
-│   ├── process-tag.sh          # per-tag: inventory → sign → prune (PEGANG SECRET)
+│   ├── process-tag.sh          # per-tag: inventory → verifikasi → sign → prune (PEGANG SECRET)
 │   └── gen-json.py             # per-tag: repodata + template → packages.json
-├── json/<tag>/packages.json    # ×9, di-commit balik oleh CI (sekarang cuma .gitkeep, §12)
+├── json/<tag>/packages.json    # ×9, di-commit balik oleh CI
 ├── keys/key.pem.pub            # satu-satunya file key yang publik
-├── pkg-template/<pkg>/template # flat, tanpa folder kategori
+├── pkg-template/<pkg>/template # flat, tanpa folder kategori (saat ini: tpkg, zvc)
 ├── vdev/
 │   ├── tools.sh                # dispatcher tipis
 │   ├── DNS-check.sh            # uji domain/Worker read-only (§13)
+│   ├── worker/index.js         # Cloudflare Worker `t4n-repo` (dikelola Founder)
 │   └── src/
-│       ├── common.sh           # path, konstanta, log, guard
+│       ├── common.sh           # path, konstanta, log, guard (name_safe, pkg_safe)
 │       ├── template.sh         # parser template + ekspansi archs
 │       ├── env.sh              # setup, sync, flag xbps-src
-│       ├── build.sh            # menu arsitektur + build
+│       ├── build.sh            # menu paket/arsitektur + build
 │       ├── upload.sh           # upload release + trigger CI
-│       └── git.sh              # tawaran push / pull-request
+│       ├── git.sh              # tawaran push / pull-request
+│       └── search.sh           # `tools search <query>`
 ├── vdocs/{EN,ID}/{DEV,USER}.md
 ├── setup.sh                    # one-liner untuk user
 ├── CONTRIBUTING.md / CONTRIBUTING.ID.md   # direncanakan, belum ada
@@ -115,16 +117,32 @@ Pencocokan glob, identik dengan `xbps-src`.
 | `x86_64* aarch64` | `x86_64`, `x86_64-musl`, `aarch64` |
 | `~i686` | semua tag kecuali `i686` |
 | `x86_64* ~x86_64-musl` | hanya `x86_64` |
+| `all` | semua 9 tag (sama dengan `*`) |
+| `all ~i686` | semua tag kecuali `i686` |
+| `~~i686` | sama dengan `~i686` (jumlah `~` tidak dibedakan) |
 
 ⚠️ Paket C yang belum siap musl harus menulis arsitektur eksplisit; `*` membuat CI
 mencoba build musl dan gagal.
 
 ⚠️ **`noarch` bukan aturan pukul rata.** Aman hanya bila paket tidak punya ELF
 terkompilasi **dan** tidak ada dependensi dengan batas versi yang di-generate
-otomatis. `letx` (`python3-pep517`) membawa `run_depends:
-python3>=3.14.0_1<3.15.0_1`, di-generate dari host build; menjadikannya `noarch`
-mengunci satu batas dari host yang bisa tidak terpuaskan di arsitektur lain.
-Lihat §14.
+otomatis. Contoh klasik: paket Python `build_style=python3-pep517` (mis. `letx`,
+yang templatenya sudah dirapikan dari `pkg-template/` pada snapshot ini) membawa
+`run_depends: python3>=3.14.0_1<3.15.0_1` yang di-generate dari host build;
+menjadikannya `noarch` mengunci satu batas dari host yang bisa tidak terpuaskan
+di arsitektur lain. Lihat §14.
+
+**Kontrak parser.** Ada dua parser template — Bash/awk (`vdev/src/template.sh`) dan
+Python (`.github/workflows/gen-json.py`) — dan keduanya **harus berperilaku
+identik**; ubah keduanya sekaligus:
+
+- Field: baris pertama yang cocok `^[ \t]*KEY=`. `#` memulai komentar hanya di
+  luar kutip **dan** di awal nilai / setelah spasi-tab (`"https://x/#a"` dan
+  `"A # B"` aman). Backslash meloloskan karakter berikutnya (kecuali dalam
+  kutip tunggal). Lalu trim spasi/tab/CR dan buang **satu** pasang kutip pembungkus.
+- `archs`: koma = spasi; kosong atau `noarch` (saja) = semua tag; token `all` = `*`;
+  token berawalan satu atau lebih `~` = negasi; pola glob (`*`, `?`, `[..]`) tidak
+  pernah di-glob terhadap isi direktori kerja; tanpa token positif = semua tag.
 
 Verifikasi ekspansi tanpa bootstrap apa pun (`template.sh` hanya berisi definisi
 fungsi, tidak punya mode `--selftest`):
@@ -136,14 +154,13 @@ bash -c '. vdev/src/common.sh; . vdev/src/template.sh; expand_archs "x86_64* ~x8
 
 ## 5. Membuat Paket Baru
 
-`pkg-template/tpkg/template`:
+`pkg-template/tpkg/template` (isi persis berkas di repositori saat ini):
 
 ```sh
 # Template file for 'tpkg'
 pkgname=tpkg
 version=1.1.0
-revision=1
-archs=noarch
+revision=2
 short_desc="A user-friendly package manager wrapper for XBPS"
 maintainer="Gh0sT4n <darskevoid@gmail.com>"
 distributor="Gh0sT4n <darskevoid@gmail.com>"
@@ -151,17 +168,33 @@ license="BSD-2-Clause"
 homepage="https://gitlab.com/t4n-pkg/tpkg/"
 distfiles="https://gitlab.com/t4n-pkg/tpkg/-/archive/v${version}/tpkg-${version}.tar.gz"
 checksum=b0873267cd08fefa9855a11e5f5207cff677a8781896bdafdf05ef5d3d450858
+
 depends="xbps"
 
 do_install() {
-    vinstall tpkg 755 usr/bin
-    vmkdir usr/lib/tpkg
-    for _mod in core usage cmd_query cmd_pkg cmd_repo; do
-        vinstall "lib/${_mod}.sh" 644 usr/lib/tpkg
-    done
-    vdoc README.md
-    vlicense LICENSE
+	vinstall tpkg 755 usr/bin
+
+	vmkdir usr/lib/tpkg
+	for _mod in core usage cmd_query cmd_pkg cmd_repo; do
+		vinstall "lib/${_mod}.sh" 644 usr/lib/tpkg
+	done
+
+	vdoc README.md
+	vlicense LICENSE
+	vdoc docs/docs-user-id.md
+	vdoc docs/docs-user-en.md
+	vdoc docs/docs-dev-id.md
+	vdoc docs/docs-dev-en.md
 }
+
+# Catatan buat maintainer:
+# - "sudo" sengaja tidak dimasukkan ke $depends karena tpkg tetap jalan
+#   di root tanpa sudo (lihat logic $SUDO di lib/core.sh). Kalau mau
+#   memaksa sudo selalu tersedia di sistem non-root, uncomment baris ini:
+# - "sudo" is intentionally omitted from $depends because tpkg still runs
+#   as root without sudo (see the $SUDO logic in lib/core.sh). If you want
+#   to force sudo to always be available on non-root systems, uncomment this line:
+# depends="sudo"
 ```
 
 Konvensi:
@@ -172,10 +205,15 @@ Konvensi:
   upstream baru.
 - `distributor` menandai siapa yang mengemas (Let-X akan mengisinya untuk template
   pihak lain).
-- Nama paket harus tetap di dalam `[A-Za-z0-9._+-]`. Lihat §9.
-- `tpkg` shell murni dengan `depends="xbps"` tanpa versi → `archs=noarch` benar:
-  satu build, di-fanout ke semua tag. Tanpa itu, `-b` membangun 9 kali termasuk 5
-  cross, memicu build GCC dari source untuk hal sia-sia (§14).
+- Nama paket harus di dalam `[A-Za-z0-9._+-]` dan tidak boleh diawali `.` atau `-`
+  (`pkg_safe`; `-b`, `-u`, dan `-sy` menolaknya, bukan sekadar warning). Lihat §9.
+- Baris `# depends="sudo"` di akhir template hanyalah komentar; parser hanya
+  membaca baris `KEY=` yang diawali (boleh berindentasi) di awal baris.
+- `tpkg` adalah shell murni dengan `depends="xbps"` tanpa versi, jadi **cocok**
+  untuk `archs=noarch` (satu build, di-fanout ke semua tag). Namun template saat ini
+  **belum menulis `archs`** (keputusan belum diambil, §12/§14): tanpa itu `-b`
+  menganggap 9 arsitektur dan membangun 9 kali termasuk 5 cross, memicu build GCC
+  dari source (§14).
 
 ## 6. Alur Developer
 
@@ -195,10 +233,10 @@ vdev/tools.sh -u <pkg>        # upload + trigger CI, lalu tawarkan push/PR
 ```sh
 vdev/tools.sh -b                          # interaktif
 vdev/tools.sh -b tpkg zvc                 # beberapa paket
-vdev/tools.sh -b radare2 -a aarch64       # satu arsitektur
-vdev/tools.sh -b radare2 -a all           # semua yang didukung
-vdev/tools.sh -b radare2 -a x86_64 i686   # beberapa
-vdev/tools.sh -b radare2 -a 'x86_64*'     # x86_64 glibc + musl
+vdev/tools.sh -b tpkg   -a aarch64       # satu arsitektur
+vdev/tools.sh -b tpkg   -a all           # semua yang didukung
+vdev/tools.sh -b tpkg   -a x86_64 i686   # beberapa
+vdev/tools.sh -b zvc    -a 'x86_64*'     # x86_64 glibc + musl
 ```
 
 Arsitektur yang diminta diiriskan dengan `archs` template; irisannya ditampilkan
@@ -215,7 +253,7 @@ LENGKAP, termasuk `-musl`.** glibc tidak punya suffix (`x86_64`, bukan
 | target **identik** dengan `HOST_ARCH` (string penuh) | tanpa flag (native) |
 | base arch sama, libc berbeda | `-A <target lengkap>` |
 | `i686` di host `x86_64`, libc sama | `-A i686` (masterdir 32-bit native) |
-| base arch berbeda | `-a <target lengkap>`, ditambah `-A <hostbase>-musl` bila target musl |
+| base arch berbeda | `-a <target lengkap>`; ditambah `-A <hostbase>[-musl]` (libc target) **hanya bila libc host ≠ libc target** |
 
 Hasil terverifikasi dari host `x86_64` (glibc):
 
@@ -231,13 +269,14 @@ Hasil terverifikasi dari host `x86_64` (glibc):
 | `armv7l` | `-a armv7l` |
 | `armv7l-musl` | `-A x86_64-musl -a armv7l-musl` |
 
-Dari host `x86_64-musl`: target `x86_64` → `-A x86_64`; target `x86_64-musl` →
-tanpa flag.
+Dari host `x86_64-musl` (dicek dengan meng-override `HOST_ARCH`): `x86_64` →
+`-A x86_64`; `x86_64-musl` → tanpa flag; `aarch64` → `-A x86_64 -a aarch64`;
+`aarch64-musl` → `-a aarch64-musl` (libc sama, **tanpa** `-A`).
 
 Dua bug yang diperbaiki:
 
 1. **`-a` dulu membuang `-musl`.** Target `armv6l-musl` menghasilkan `-a armv6l`,
-   jadi paket yang dibangun sebenarnya **glibc** aunque diminta musl — gagal
+   jadi paket yang dibangun sebenarnya **glibc** meskipun diminta musl — gagal
    diam-diam, bukan error. Sekarang `-a armv6l-musl`.
 2. **`-A <hostbase>-glibc` tidak valid.** Host musl dengan target glibc dulu
    menghasilkan `-A x86_64-glibc`; string itu tidak ada di Void. Sekarang
@@ -254,25 +293,53 @@ bash -c '. vdev/src/common.sh; . vdev/src/template.sh; . vdev/src/env.sh
          for a in "${ALL[@]}"; do printf "%-14s → %s\n" "$a" "$(flags_for "$a" | xargs)"; done'
 ```
 
+### Sync
+
+```sh
+vdev/tools.sh -sy
+```
+
+`git pull --ff-only` pada `void-packages`, lalu menyalin template baru/berubah dari
+`pkg-template/` ke `void-packages/srcpkgs/`. Nama yang disalin dicatat di
+`void-packages/.git/t4n-staged` (di dalam `.git`, jadi tidak mengotori `git status`).
+Template yang kemudian **dihapus** dari `pkg-template/` dibersihkan dari `srcpkgs/` pada
+sync berikutnya; bila namanya ada di upstream Void, resep resmi dipulihkan lewat
+`git checkout`. Pelacakan dimulai sejak sync pertama dengan versi ini — salinan lama
+dari sebelum itu harus dibersihkan manual (`git -C void-packages status`).
+
+Nama paket yang masuk ke operasi path divalidasi oleh `pkg_safe` (`name_safe` ditambah
+"tidak diawali `.` atau `-`"); nama tidak aman ditolak dengan error. `-b` memvalidasi
+semua nama dan keberadaan template **sebelum** clone/bootstrap `void-packages`.
+
 ### Upload
 
 ```sh
 vdev/tools.sh -u tpkg
 ```
 
-1. Cek akses write via `gh api repos/T4n-Labs/repo-t4nos --jq .permissions.push`.
+1. `gh auth status`: belum login → error jelas dan upload/trigger dilewati (exit 1).
+   Lalu cek akses write via `gh api repos/T4n-Labs/repo-t4nos --jq .permissions.push`;
+   kegagalan API dilaporkan apa adanya, tidak dianggap "tanpa izin".
 2. **Punya write:** mencocokkan file `.xbps` di `void-packages/hostdir/binpkgs`
    dengan `pkgname` + subpackage dan `version_revision` template, mengarahkannya
-   ke tag (`noarch` → semua tag yang didukung), upload dengan `--clobber`, lalu
-   men-trigger `process.yml` **sekali** dengan daftar tag yang tersentuh.
+   ke tag (`noarch` → semua tag yang didukung; arsitektur di luar `archs` →
+   warning dan dilewati), upload dengan `--clobber`, lalu men-trigger `process.yml`
+   **sekali** dengan daftar tag yang tersentuh.
 3. **Tanpa write:** upload dan trigger dilewati, dengan pemberitahuan bahwa
    maintainer akan build dan upload setelah PR di-merge.
 4. Dua-duanya tetap menawarkan `git push`, dan menawarkan buka PR kalau `origin`
-   adalah fork.
+   bukan `T4n-Labs/repo-t4nos`. Tawaran aman tanpa TTY (EOF = "tidak") dan tidak
+   mengubah exit code setelah upload sukses.
 
 Hanya file yang cocok `version_revision` template yang diupload; build lama di
 `binpkgs` di-skip dengan warning. Template adalah sumber kebenaran, bukan "file
 terbaru di folder". Urutan penting: **edit template → build → upload**.
+
+Meng-upload ulang biner **dengan nama sama** (rebuild tanpa naik `revision`) didukung:
+`--clobber` mengganti `.xbps`, dan CI mendeteksi `.xbps` yang lebih baru dari
+`.sig2`-nya lalu menandatangani ulang. Tetap naikkan `revision` untuk perubahan yang
+harus sampai ke pengguna — klien yang sudah menyimpan file bernama sama di cache tidak
+mengunduhnya lagi.
 
 Biner yang diupload **belum bertanda tangan**. CI yang menandatangani. Ada window
 singkat di mana asset sudah ada tapi `.sig2`-nya belum — jangan umumkan rilis
@@ -303,39 +370,64 @@ antri.
 | 3 | `json` ×9 | tidak | ya | repodata + template → `packages.json` |
 | 4 | `commit` | tidak | tidak | commit `json/**` sekali, hanya kalau berubah |
 
-⚠️ **Jebakan shell container (§14):** blok `run` multi-baris job `json` diawali
-`set -euo pipefail`, tapi container Void menjalankannya dengan `sh`, yang tidak
-mengenal `pipefail`. Step itu butuh `shell: bash`. Per 24 Nov 2026 ini **belum
-diterapkan** (`grep -n 'shell: bash'` kosong), jadi 9 job `json` gagal di baris 1.
-Job `process` tidak kena karena `pipefail`-nya ada di dalam `process-tag.sh`,
-dipanggil dengan `bash`.
+⚠️ **Jebakan shell container (§14):** container Void menjalankan blok `run` dengan
+`sh`, yang tidak mengenal `pipefail`. Step job `json` yang diawali
+`set -euo pipefail` karena itu memakai `shell: bash` (sudah diterapkan di
+`process.yml`; pertahankan). Job `process` tidak kena karena `pipefail`-nya ada di
+dalam `process-tag.sh`, dipanggil dengan `bash`.
+
+### Izin dan pin di `process.yml`
+
+- `permissions` default `contents: read`; `prepare`, `process`, dan `commit` menaikkan
+  sendiri ke `contents: write` (buat release / upload-hapus asset / push `json/`),
+  `json` tetap `contents: read`.
+- Action dipin ke SHA commit (`checkout` v4.3.1, `upload-artifact` v4.6.2,
+  `download-artifact` v4.3.0); perbarui dengan sengaja, jangan kembali ke tag mengambang.
+- `persist-credentials: false` pada checkout job `process` (pemegang secret) dan `json`.
+- Image container: `ghcr.io/void-linux/void-{glibc}-full:${{ vars.VOID_IMAGE_TAG || 'latest' }}`.
+  Untuk memin, set variabel repo `VOID_IMAGE_TAG` ke tag bertanggal. Selama belum
+  diset, image jatuh ke `latest` (**tidak terpin**; lihat §12).
 
 ### Isi job `process` (per tag)
 
 ```
-inventory   daftar asset via API paginated
-rencana     kelompokkan .xbps per nama paket, keep versi+revisi tertinggi
+inventory   daftar asset (nama + updated_at) via API paginated
+rencana     per nama paket, telusuri kandidat versi tertinggi → terendah
             (xbps-uhelper getpkgname / cmpver — bukan regex)
-            sisanya → prune list
-            unsigned = file yang di-keep tapi belum punya .sig2
-            kalau unsigned & prune kosong dan repodata ada → skip
-unduh       file yang di-keep ke folder kerja KOSONG
-verifikasi  baca props.plist di dalam tiap .xbps; nama asset harus persis
-            <pkgver>.<architecture>.xbps, kalau tidak → tolak
+            tepercaya = .sig2 ada DAN tidak lebih tua dari .xbps → dipilih tanpa unduh
+            selain itu (tanpa .sig2, atau .xbps lebih baru dari .sig2) → unduh + verifikasi
+verifikasi  baca props.plist di dalam .xbps; nama asset harus persis
+            <pkgver>.<architecture>.xbps; gagal → DITOLAK (dibiarkan, TIDAK dihapus),
+            penelusuran lanjut ke versi di bawahnya
+prune       hanya kandidat DI BAWAH versi terpilih yang lolos verifikasi
+unsigned    = terpilih tanpa .sig2 segar
+skip        unsigned & prune kosong, repodata ada dan tidak lebih tua dari .xbps
+            → hanya hapus .sig2 yatim, selesai
 [1/3] index xbps-rindex -a *.xbps            → <tag>-repodata
 [2/3] sign  xbps-rindex --sign               → kunci publik masuk ke repodata
 [3/3] sign  xbps-rindex --sign-pkg           → .sig2 hanya untuk yang unsigned
 upload      repodata + .sig2 baru DULU
-prune       hapus .xbps + .sig2 lama TERAKHIR
+prune       hapus .xbps + .sig2 lama TERAKHIR, lalu .sig2 yatim
 ```
 
-Dua detail yang perlu diketahui:
+Detail yang perlu diketahui:
 
 - **Kalibrasi `cmpver`.** Daripada mengasumsikan apakah `xbps-uhelper cmpver`
   melapor lewat stdout atau exit code, skrip menjalankan dua probe yang jawabannya
   sudah diketahui lalu mencocokkan signature-nya. Kalau kedua probe terlihat
   identik, pruning dibatalkan daripada berisiko menghapus versi yang salah.
-- **Tag kosong.** Kalau tidak ada yang di-keep, prune tetap jalan dan repodata
+- **Verifikasi gagal tidak menghapus apa pun.** Versi terbaru yang ditolak dibiarkan
+  di release, versi lama yang valid tetap dipakai dan tidak di-prune. Kalau satu nama
+  paket tidak punya versi lolos sama sekali, hanya muncul peringatan dan semua
+  berkasnya dibiarkan; kalau **tidak ada** paket lolos di tag itu, job gagal
+  (`exit 1`). Asset yang ditolak tidak membuat repodata diunggah ulang setiap run;
+  perbaiki dengan upload ulang bernama benar lalu hapus yang salah secara manual.
+- **Upload ulang nama sama.** `.xbps` yang `updated_at`-nya lebih baru dari `.sig2`-nya
+  dianggap basi: diverifikasi ulang, di-index ulang, dan `.sig2`-nya dibuat ulang.
+- **`.sig2` yatim** (pasangan `.xbps`-nya sudah tidak ada) dihapus di akhir, setelah upload.
+- **Berkas tepercaya yang gagal verifikasi ulang** (anomali) menghentikan job tanpa
+  mengubah apa pun.
+- **Tag kosong.** Kalau tidak ada `.xbps` sama sekali, `.sig2` yatim dan repodata
   basi dihapus supaya client tidak membaca indeks yang menunjuk file terhapus.
 
 ### Skema `packages.json`
@@ -349,17 +441,24 @@ di dalam repodata; field yang tidak ada di sana diambil dari template.
     "name": "tpkg",
     "version": "1.1.0",
     "arch": "x86_64",
-    "archs": ["x86_64", "x86_64-musl", "aarch64", "..."],
-    "filename": "tpkg-1.1.0_1.noarch.xbps",
-    "size": 184320,
-    "status": "ready",
-    "description": "A user-friendly package manager wrapper for XBPS",
+    "archs": [
+      "x86_64",
+      "x86_64-musl",
+      "aarch64",
+      "aarch64-musl",
+      "armv6l",
+      "armv6l-musl",
+      "armv7l",
+      "armv7l-musl",
+      "i686"
+    ],
+    "size": 18366,
+    "category": "xbps",
     "desc": "A user-friendly package manager wrapper for XBPS",
     "homepage": "https://gitlab.com/t4n-pkg/tpkg/",
     "maintainer": "Gh0sT4n <darskevoid@gmail.com>",
     "distributor": "Gh0sT4n <darskevoid@gmail.com>",
-    "license": "BSD-2-Clause",
-    "url": "<BASE>/x86_64/tpkg-1.1.0_1.noarch.xbps"
+    "license": "BSD-2-Clause"
   }
 ]
 ```
@@ -367,14 +466,17 @@ di dalam repodata; field yang tidak ada di sana diambil dari template.
 | Field | Sumber |
 |---|---|
 | `name` | `pkgname` |
-| `version` | `version` dari repodata, revisi dibuang |
+| `version` | dari `pkgver` repodata (`<nama>-<versi>_<revisi>` → versi tanpa revisi); kategori `template`: field `version` template |
 | `arch` | nama tag |
-| `archs` | `archs` template, sudah di-expand |
-| `filename`, `size` | metadata asset release |
-| `url` | `<BASE>/<tag>/<filename>`; `BASE` di `gen-json.py` (lihat §12) |
-| `description` / `desc` | `short_desc` (`desc` alias untuk frontend sekarang) |
+| `archs` | `archs` template, sudah di-expand (kontrak §4); subpackage tanpa template fallback ke `[tag]` |
+| `size` | ukuran asset `.xbps` (byte); cadangan `filename-size` repodata; `null` untuk `template` |
+| `category` | `xbps` (biner ada di tag ini) atau `template` (hanya template, biner belum dibangun) |
+| `desc` | `short_desc` (repodata, cadangan template) |
+| `homepage`, `maintainer`, `license` | repodata, cadangan template |
 | `distributor` | hanya dari template |
-| `status` | `ready` (biner ada) atau `recipe` (template saja; `filename`/`size`/`url` bernilai `null`) |
+
+JSON **tidak** memuat `filename`, `url`, atau `status`; URL unduhan dibentuk klien dari
+`<BASE>/<tag>/<pkgver>.<arch>.xbps`.
 
 Subpackage (`-dbg`, `-doc`, `-devel`) tidak punya template sendiri, jadi `archs`
 mereka fallback ke `[tag]`.
@@ -437,7 +539,7 @@ luar itu dijawab 404 walaupun file-nya ada di release.
 - [ ] Build lokal di host plus minimal satu target cross
 - [ ] `vdev/tools.sh -u <pkg>` → workflow ter-trigger
 - [ ] Semua job CI hijau (`gh run watch -R T4n-Labs/repo-t4nos`)
-- [ ] Paket tampil `ready` di website untuk arsitektur yang diharapkan
+- [ ] `json/<tag>/packages.json` memuat paket dengan `category: xbps` untuk arsitektur yang diharapkan (dan tampil di website)
 - [ ] `xbps-install -S && xbps-install <pkg>` sukses di sistem uji bersih
 - [ ] Versi lama hilang dari release tag (`gh release view <tag>`)
 
@@ -445,7 +547,9 @@ luar itu dijawab 404 walaupun file-nya ada di release.
 
 | Gejala | Penyebab / perbaikan |
 |---|---|
-| Job `json`: `set: Illegal option -o pipefail` | container menjalankan `sh`; tambah `shell: bash` ke step itu (§14) |
+| Job `json`: `set: Illegal option -o pipefail` | container menjalankan `sh`; pastikan step itu tetap memakai `shell: bash` (§14) |
+| `::error::… DITOLAK` di job `process` | nama asset ≠ isi paket; asset dibiarkan dan versi lama yang valid tetap dipakai. Upload ulang dengan nama benar, hapus yang salah manual |
+| Client: signature gagal setelah upload ulang nama sama | `.xbps` lebih baru dari `.sig2`; CI menandatangani ulang di run berikutnya — percepat dengan `gh workflow run process.yml -R T4n-Labs/repo-t4nos -f tags=<tag>` |
 | Job musl gagal | paket belum siap musl → tulis archs eksplisit, atau perbaiki build |
 | Build ARM di-skip | `nocross=` di template — wajar, atau adaptasi untuk cross |
 | Build cross berjam-jam | toolchain dibangun dari source; cek `xbps-query -Rs cross-…` dulu (§14) |
@@ -460,49 +564,47 @@ luar itu dijawab 404 walaupun file-nya ada di release.
 
 ## 12. Status Implementasi
 
-Diperbarui 24 November 2026. Setiap baris "terverifikasi" punya bukti keluaran
-perintah atau log CI; yang lain ditandai eksplisit.
+Diperbarui 25 November 2026. Setiap baris "terverifikasi" punya bukti keluaran
+perintah, uji di sandbox, atau log CI; yang lain ditandai eksplisit.
 
 ### Terverifikasi
 
 | Item | Bukti |
 |---|---|
-| `flags_for` benar untuk 13 kombinasi host×target | keluaran uji, cocok tabel §6 |
-| **Signing berjalan** — tag punya `.xbps` + `.sig2` + `<tag>-repodata` | screenshot Releases (`tpkg-1.1.0_1`, lalu `_2`) |
-| `SIGN_KEY` ada di Environment `signing` | `gh secret list --env signing` |
-| `.github/workflows/` = 3 file, tanpa legacy | `ls -1` |
-| `vdev/tools.sh` terpecah ke `src/` (6 modul) | `ls -1` |
-| Tidak ada `restricted`/`POLICY` di workflows maupun `vdev/` | `grep` kosong |
-| `process.yml` = 4 job (`prepare`, `process`, `json`, `commit`) | `grep` kunci job |
-| Worker + domain aktif | `DNS-check.sh` 14/14 (22 Nov) |
-| `bash -n`, `sh -n`, `ast.parse` lulus | keluaran perintah |
+| `flags_for` benar untuk 9 target dari host `x86_64`; host `x86_64-musl`, `i686`, `aarch64` dicek lewat override `HOST_ARCH` | keluaran uji (25 Nov), cocok tabel §6 |
+| **Signing berjalan** — tag punya `.xbps` + `.sig2` + `<tag>-repodata` | screenshot Releases (`tpkg-1.1.0_1`, lalu `_2`) (24 Nov) |
+| `FINGERPRINT` di `setup.sh` = MD5 blob `keys/key.pem.pub` | dihitung ulang (25 Nov) |
+| `json/<tag>/packages.json` ×9 sudah ter-commit CI | `ls json/*` |
+| `.github/workflows/` = 3 file; `vdev/src/` = 7 modul | `ls -1` |
+| `process.yml` = 4 job; step `json` memakai `shell: bash`; `permissions` per job; action dipin SHA | `grep` + `yaml.safe_load` |
+| Parser Bash/awk ≡ Python (field dan `archs`), tanpa glob terhadap cwd | uji paritas 56 kasus (25 Nov) |
+| `process-tag.sh`: upload ulang nama sama, versi baru ditolak, run lanjutan tanpa churn, `.sig2` yatim | harness stub (`gh`/`xbps-*` palsu), 25 Nov |
+| Perbaikan `vdev/` (`route_tags`, menu `08`/`09`, urutan validasi, `pkg_safe`, `git_offer`, sync) | uji reproduksi sebelum/sesudah (25 Nov) |
+| `bash -n`, `sh -n`, `ast.parse`, `yaml.safe_load`, JSON valid | keluaran perintah |
 
 ### Belum selesai / belum diterapkan
 
 | Item | Keadaan |
 |---|---|
-| `shell: bash` di job `json` | **belum diterapkan** (`grep` kosong). Tanpa ini 9 job `json` gagal — §14 |
-| `json/<tag>/packages.json` | belum pernah ter-commit; folder masih `.gitkeep` |
-| `FINGERPRINT` di `setup.sh` | masih placeholder |
-| Tes end-to-end `xbps-install -S` lewat domain | belum dilakukan |
-| Konsistensi `BASE` | **cek di disk** — snapshot beda: `setup.sh` menampilkan domain, `gen-json.py` menampilkan URL release. Keduanya harus sama. Jalankan `grep -n '^BASE' setup.sh .github/workflows/gen-json.py` |
-| Branch protection, ruleset, `.github/CODEOWNERS` | **tidak ada** — ditunda sampai repo terbukti dipakai publik |
-| Environment `signing` dibatasi ke `main` | `deployment-branch-policies` 404 → belum dibatasi |
+| `xbps-install -S` end-to-end lewat domain | belum dilakukan |
+| Perilaku nyata `gh release upload --clobber` (apakah `updated_at` `.xbps` maju) dan `xbps-uhelper cmpver` dengan `pkgver` penuh | hanya diuji dengan stub; verifikasi di CI nyata |
+| Image container Void tidak terpin | variabel repo `VOID_IMAGE_TAG` belum diset → `latest` |
+| Worker + domain aktif | `DNS-check.sh` 14/14 (22 Nov), belum diverifikasi ulang |
+| Branch protection, ruleset, `.github/CODEOWNERS` | **tidak ada** (24 Nov, belum diverifikasi ulang) — ditunda sampai repo terbukti dipakai publik |
+| Environment `signing` dibatasi ke `main` | `deployment-branch-policies` 404 (24 Nov) → belum dibatasi |
 | `CONTRIBUTING*`, LICENSE | belum ada / belum diputuskan |
-| Tag `armv6l-musl`, `armv7l-musl` | belum ada paket → `xbps-install -S` 404 untuk arsitektur itu |
-| Ringkasan build (Success/Failed per arch) | diminta; penerapan belum dikonfirmasi |
-| Menu paket bernomor 18/halaman (`n`/`p`/`q`) | diminta; penerapan belum dikonfirmasi |
-| `tools search <query>` + `src/search.sh` | diminta; penerapan belum dikonfirmasi |
-| `./tools` dan `./vdev/tools` (tanpa `.sh`) | diminta; penerapan belum dikonfirmasi |
-| Aturan wajib `archs=noarch` | **belum diputuskan** — lihat §14 |
-| PyYAML di mesin dev | tidak terpasang → cek `yaml.safe_load` (§10 PROMPT) tidak bisa dijalankan |
+| Tag `armv6l-musl`, `armv7l-musl` | belum ada paket biner → `xbps-install -S` 404 untuk arsitektur itu |
+| `./tools` dan `./vdev/tools` (tanpa `.sh`) | `tools.sh` bisa me-resolve symlink, tetapi symlink-nya tidak ada di repo |
+| Aturan wajib `archs=noarch` | **belum diputuskan** — `tpkg` saat ini tanpa `archs` (§14) |
+| PyYAML di mesin dev | tidak terpasang → pakai probe struktural di §14 |
 
-Urutan tersisa: terapkan `shell: bash` → job `json` hijau → `json/` ter-commit →
-`xbps-install -S` di sistem bersih dengan conf **manual ke domain** → catat
-fingerprint → isi `FINGERPRINT` → samakan `BASE` di dua file → hardening.
+Urutan tersisa: set `VOID_IMAGE_TAG` → verifikasi `--clobber`/`updated_at` di CI nyata →
+`xbps-install -S` di sistem bersih dengan conf **manual ke domain** → hardening
+(CODEOWNERS, branch protection, pembatasan Environment).
 
-**Penting:** menjalankan `setup.sh` **tidak** menguji Worker kalau `BASE`-nya URL
-release. Tes end-to-end harus menulis conf manual:
+**Penting:** `setup.sh` secara default menunjuk domain (Worker), jadi menjalankannya
+menguji Worker. Kalau `T4N_BASE` di-override ke URL release, Worker tidak ikut diuji.
+Tes end-to-end bisa menulis conf manual:
 
 ```sh
 echo 'repository=https://repo.t4nlabs.web.id/x86_64' | sudo tee /etc/xbps.d/10-t4nos.conf
@@ -557,10 +659,9 @@ Error: Process completed with exit code 2.
 
 Runner tidak mengenali container Void sebagai distro ber-bash default, jadi blok
 `run` dijalankan dengan `sh`. `set -o pipefail` tidak dikenal di sana → step mati
-di baris 1, sebelum perintah apa pun jalan. **Semua 9 job `json` gagal** karena
-ini.
+di baris 1, sebelum perintah apa pun jalan. Saat itu **semua 9 job `json` gagal**; sudah diperbaiki.
 
-Perbaikan: `shell: bash` pada step yang blok `run`-nya diawali
+Perbaikan (sudah diterapkan): `shell: bash` pada step yang blok `run`-nya diawali
 `set -euo pipefail`. `bash` sudah dipasang step **Install tools** yang hijau, jadi
 step sesudahnya boleh memakainya. Jangan pakai `defaults.run.shell: bash` di level
 job — itu memaksa Install tools memakai bash sebelum bash terpasang.
@@ -586,23 +687,25 @@ Untuk paket shell/script murni, kerja ini nol manfaat — lihat butir berikut.
 ### Paket script tanpa `archs=noarch` memicu cross build sia-sia
 
 `tpkg` isinya shell + modul `.sh` dengan `depends="xbps"` tanpa batas versi.
-Karena template-nya tidak menulis `archs=noarch`, ia dianggap mendukung 9
-arsitektur dan `-b` membangun 9 kali termasuk 5 cross — memicu build GCC di atas
-untuk menyalin enam file `.sh`.
+Template saat ini (`revision=2`) **tidak menulis `archs=noarch`**, sehingga ia dianggap
+mendukung 9 arsitektur dan `-b` membangun 9 kali termasuk 5 cross — memicu build GCC
+di atas untuk menyalin enam file `.sh`. Menjadikannya `noarch` masih berupa keputusan
+yang belum diambil (§12).
 
 Satu build `noarch` menghasilkan satu `.noarch.xbps` yang di-fanout `cmd_upload`
 ke semua tag yang didukung. **Hemat waktu build, bukan storage**: file yang sama
 disimpan sekali per tag (9×).
 
-⚠️ **Jangan pukul rata.** `letx` memakai `build_style=python3-pep517` dan
-`index.plist`-nya berisi `run_depends: python3>=3.14.0_1<3.15.0_1` — batas versi
-yang di-generate otomatis dari python3 di masterdir saat build. Kalau dijadikan
-`noarch`, satu file membawa satu batas dari host dan bisa tidak terpuaskan di
-arsitektur yang revisi python3-nya beda. Cek dulu:
+⚠️ **Jangan pukul rata.** Paket Python `build_style=python3-pep517` (contoh historis:
+`letx`, yang kini tidak ada di `pkg-template/`) membawa di `index.plist`-nya
+`run_depends: python3>=3.14.0_1<3.15.0_1` — batas versi yang di-generate otomatis dari
+python3 di masterdir saat build. Kalau dijadikan `noarch`, satu file membawa satu batas
+dari host dan bisa tidak terpuaskan di arsitektur yang revisi python3-nya beda. Cek dulu
+(ganti `<pkg>-<versi>_<revisi>`):
 
 ```sh
 cd void-packages/hostdir/binpkgs
-for f in letx-1.0.0_1.*.xbps; do
+for f in <pkg>-<versi>_<revisi>.*.xbps; do
   printf '%s: ' "$f"
   bsdtar -xOf "$f" props.plist | grep -A2 run_depends | tr -d '\n\t '
   echo

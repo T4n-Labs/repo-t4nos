@@ -67,6 +67,36 @@ echo "repository=https://repo.t4nlabs.web.id/$(xbps-uhelper arch)" \
 sudo xbps-install -S
 ```
 
+### `setup.sh` commands and environment variables
+
+```sh
+sudo sh setup.sh              # install the repository (default, same as `setup`)
+sudo sh setup.sh update       # sync the index + upgrade: xbps-install -Su [options]
+sh setup.sh --help
+```
+
+`update` needs the repository to be installed first (it checks the configuration
+file) and passes any extra options through to `xbps-install -Su`. Through a pipe:
+`curl -fsSL https://repo.t4nlabs.web.id/setup.sh | sudo sh -s update`. Do not pass
+`-y` to `update` unless you have already verified the fingerprint. `setup`
+overwrites the configuration file if it already exists.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `T4N_BASE` | `https://repo.t4nlabs.web.id` | Base URL; written as `repository=<T4N_BASE>/<arch>`. Fallback: the release URL (see Troubleshooting) |
+| `CONF_FILE` | `/etc/xbps.d/10-t4nos.conf` | Where the configuration file is written |
+| `T4N_ASSUME_YES` | `0` | `1` runs `xbps-install -S -y` and **skips the fingerprint prompt** |
+
+`sudo` usually strips environment variables, so pass them through `env`:
+
+```sh
+sudo env T4N_BASE=https://github.com/T4n-Labs/repo-t4nos/releases/download sh setup.sh
+sudo env T4N_ASSUME_YES=1 sh setup.sh   # ONLY after verifying the fingerprint yourself
+```
+
+Without a terminal (CI, a plain pipe) `setup` cannot ask for confirmation and stops,
+unless `T4N_ASSUME_YES=1` is set.
+
 ### ⚠️ Verify the Fingerprint (mandatory)
 
 On the first sync, XBPS displays the repository key fingerprint and asks for
@@ -94,7 +124,7 @@ fingerprint yourself.
 ## 2. Search and Install
 
 ```sh
-xbps-query -Rs "name"        # search, e.g. zvc, letx, tpkg
+xbps-query -Rs "name"        # search, e.g. zvc, tpkg
 sudo xbps-install name       # install
 sudo xbps-install -Su        # update everything (official + T4n OS)
 ```
@@ -108,7 +138,7 @@ https://repo-web.t4nlabs.web.id/
 - **Live search** with highlighting (110 ms debounce)
 - **Architecture tabs** with live package counters
 - **Pagination** for large result sets
-- **Shareable URLs** — state lives in the URL hash: `#q=radare&arch=x86_64&page=2`
+- **Shareable URLs** — state lives in the URL hash: `#q=zvc&arch=x86_64&page=2`
 - **Keyboard shortcuts** — `/` focuses search, `Esc` clears it
 - **One-click copy** of the install command per package
 
@@ -116,8 +146,8 @@ https://repo-web.t4nlabs.web.id/
 
 | Badge | Meaning |
 |---|---|
-| `ready` | Binary exists for that architecture — installable now |
-| `recipe` | Template exists, binary not built yet for that architecture |
+| `ready` | Binary exists for that architecture — installable now (`category: xbps` in the index JSON) |
+| `recipe` | Template exists, binary not built yet for that architecture (`category: template`) |
 
 A `recipe` entry is **not** downloadable. It shows up so you can see what is
 coming; wait until it turns `ready`.

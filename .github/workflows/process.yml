@@ -10,8 +10,9 @@ on:
   schedule:
     - cron: '23 */6 * * *'   # cadangan; no-op kalau tak ada yang perlu diproses
 
+# Minimal: default hanya baca. Tiap job menaikkan sendiri sesuai kebutuhan nyata.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: repo-process
@@ -24,6 +25,8 @@ jobs:
   # 0. tag idempotent. Tanpa secret, tanpa template.
   prepare:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write        # gh release create (idempotent)
     outputs:
       tags: ${{ steps.t.outputs.tags }}
     steps:
@@ -59,12 +62,17 @@ jobs:
     needs: prepare
     runs-on: ubuntu-latest
     environment: signing
+    permissions:
+      contents: write        # upload repodata/.sig2 + hapus asset lama (gh release)
     strategy:
       fail-fast: false
       matrix:
         tag: ${{ fromJson(needs.prepare.outputs.tags) }}
     container:
-      image: ghcr.io/void-linux/void-glibc-full:latest
+      # Pin: set variabel repo VOID_IMAGE_TAG ke tag bertanggal dari
+      # ghcr.io/void-linux/void-glibc-full (Settings → Variables). Selama belum diset,
+      # jatuh ke 'latest' (TIDAK terpin) — tag valid tidak bisa diverifikasi dari sandbox.
+      image: ghcr.io/void-linux/void-glibc-full:${{ vars.VOID_IMAGE_TAG || 'latest' }}
       env:
         PATH: '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/sbin:/usr/local/bin'
     steps:
@@ -73,9 +81,10 @@ jobs:
           xbps-install -Syu xbps && xbps-install -yu
           xbps-install -y bash git tar bsdtar python3 github-cli curl jq coreutils grep sed findutils
       - name: Checkout (hanya script CI — template sengaja tidak diambil)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           sparse-checkout: .github/workflows
+          persist-credentials: false   # job pemegang secret: token tidak ditinggal di .git/config
       - name: Process tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -90,12 +99,17 @@ jobs:
     needs: [prepare, process]
     if: ${{ !cancelled() && needs.prepare.result == 'success' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read         # baca release/asset + checkout; membaca template, TANPA secret & tanpa tulis
     strategy:
       fail-fast: false
       matrix:
         tag: ${{ fromJson(needs.prepare.outputs.tags) }}
     container:
-      image: ghcr.io/void-linux/void-glibc-full:latest
+      # Pin: set variabel repo VOID_IMAGE_TAG ke tag bertanggal dari
+      # ghcr.io/void-linux/void-glibc-full (Settings → Variables). Selama belum diset,
+      # jatuh ke 'latest' (TIDAK terpin) — tag valid tidak bisa diverifikasi dari sandbox.
+      image: ghcr.io/void-linux/void-glibc-full:${{ vars.VOID_IMAGE_TAG || 'latest' }}
       env:
         PATH: '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/sbin:/usr/local/bin'
     steps:
@@ -103,7 +117,9 @@ jobs:
         run: |
           xbps-install -Syu xbps && xbps-install -yu
           xbps-install -y bash git tar bsdtar python3 github-cli curl jq zstd
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
       - name: Ambil repodata + daftar asset
         shell: bash          # container Void: tanpa ini `run` memakai sh (tidak kenal pipefail)
         env:
@@ -123,7 +139,7 @@ jobs:
         env:
           TAG: ${{ matrix.tag }}
         run: python3 .github/workflows/gen-json.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: json-${{ matrix.tag }}
           path: json/${{ matrix.tag }}/packages.json
@@ -135,9 +151,11 @@ jobs:
     needs: [prepare, json]
     if: ${{ !cancelled() && needs.prepare.result == 'success' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write        # git push json/**
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: json-*
           path: json-artifacts
