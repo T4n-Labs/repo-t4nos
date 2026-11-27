@@ -26,6 +26,14 @@ sudo sh setup.sh
 Ditandatangani `T4n Labs`; satu kunci untuk semua tag. Jawab `yes` pada prompt
 kunci XBPS hanya jika fingerprint yang ditampilkan sama persis dengan ini.
 
+## Satu Baris
+
+```sh
+curl -fsSL https://repo.t4nlabs.web.id/setup.sh | sudo sh
+```
+
+Skrip mendeteksi arsitektur dan libc Anda, menulis satu berkas konfigurasi, lalu menyinkronkan indeks paket.
+
 ## Dokumentasi
 
 | | English | Bahasa Indonesia |

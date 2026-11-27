@@ -168,6 +168,16 @@ The public key you already imported stays in `/var/db/xbps/keys/`. Delete its
 
 ## ❓ Troubleshooting
 
+**`ERROR: <package-name>: the RSA signature is not valid!`**
+The package or signature file in the local XBPS cache (`/var/cache/xbps/`) is
+corrupt or was not fully downloaded (e.g. due to a dropped connection). XBPS
+automatically removes the bad file; simply force a fresh download from the server:
+
+```sh
+sudo xbps-remove -O
+sudo xbps-install -S package-name
+```
+
 **`repository is not signed, refusing to continue!`**
 Remote XBPS repositories must be signed. Check that the URL in your `.conf`
 file is correct and that you accepted the key import. Re-sync with

@@ -25,6 +25,14 @@ sudo sh setup.sh
 Signed by `T4n Labs`; one key signs every tag. Answer `yes` to the XBPS key prompt
 only if the fingerprint it shows matches this one exactly.
 
+## One-liner :
+
+```sh
+curl -fsSL https://repo.t4nlabs.web.id/setup.sh | sudo sh
+```
+
+The script detects your architecture and libc, writes one configuration file, then synchronises the package index.
+
 ## Documentation
 
 | | English | Bahasa Indonesia |

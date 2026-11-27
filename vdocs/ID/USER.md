@@ -167,6 +167,17 @@ Kunci publik yang sudah Anda impor tetap berada di `/var/db/xbps/keys/`. Hapus b
 
 ## ❓ Pemecahan Masalah
 
+
+**`ERROR: ...: the RSA signature is not valid!`**
+File paket atau signature di cache lokal XBPS (`/var/cache/xbps/`) rusak atau tidak
+terunduh sempurna (misalnya karena koneksi terputus). XBPS akan mencoba menghapus file
+rusak tersebut secara otomatis, lalu Anda cukup memaksa unduh ulang dari server:
+
+```sh
+sudo xbps-remove -O
+sudo xbps-install -S nama-paket
+```
+
 **`repository is not signed, refusing to continue!`**
 Repositori XBPS jarak jauh harus bertanda tangan. Periksa bahwa URL di berkas `.conf`
 benar dan Anda sudah menerima impor kunci. Sinkron ulang dengan
