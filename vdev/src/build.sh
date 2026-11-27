@@ -166,7 +166,7 @@ cmd_build(){
 
         info "$pkg support : ${sup[*]}"
         info "$pkg dibuild : ${targets[*]}"
-        tpl_stage "$pkg"
+        tpl_stage "$pkg" || { err "$pkg: FIX.sh gagal — skip"; rc=1; continue; }
 
         okl=""; badl=""; noarch=0
         if tpl_is_noarch "$pkg"; then

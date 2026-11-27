@@ -5,6 +5,7 @@ VP="$REPO_DIR/void-packages"
 TPL="$REPO_DIR/pkg-template"
 GH_REPO="T4n-Labs/repo-t4nos"
 ALL=(x86_64 x86_64-musl aarch64 aarch64-musl armv6l armv6l-musl armv7l armv7l-musl i686)
+FIX_MUTABLE=(common/shlibs)
 HOST_ARCH="$(xbps-uhelper arch 2>/dev/null || uname -m)"
 
 B='\033[0;34m'; G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; N='\033[0m'

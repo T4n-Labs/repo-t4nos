@@ -49,6 +49,7 @@ cmd_setup(){
 
 cmd_sync(){
     [ -d "$VP/.git" ] || cmd_setup
+    fix_revert
     info "git pull void-packages..."
     (cd "$VP" && git pull --ff-only) || warn "pull gagal, lanjut dengan yang ada"
     _staged_prune
@@ -60,8 +61,9 @@ cmd_sync(){
             rm -rf "${VP:?}/srcpkgs/$name"; cp -a "$d" "$VP/srcpkgs/$name"
             info "sync: $name"; n=$((n+1))
         fi
-        _staged_add "$name"
+    _staged_add "$name"
     done
+    fix_run_all
     ok "$n template disinkronkan"
 }
 
@@ -131,7 +133,7 @@ cmd_force(){
         
         info "$pkg support : ${sup[*]}"
         info "$pkg di-force  : ${targets[*]}"
-        tpl_stage "$pkg"
+        tpl_stage "$pkg" || { err "$pkg: FIX.sh gagal — skip"; rc=1; continue; }
         
         okl=""; badl=""; noarch=0
         if tpl_is_noarch "$pkg"; then
@@ -219,6 +221,55 @@ tpl_stage(){
     [ -f "$TPL/$1/template" ] || die "tpl_stage: template tidak ada: $1"
     rm -rf "${VP:?}/srcpkgs/$1"; cp -a "$TPL/$1" "$VP/srcpkgs/$1"
     _staged_add "$1"
+    fix_run "$1" || return 1
+}
+
+# ---- FIX.sh: hook per-paket -------------------------------------------------
+# pkg-template/<pkg>/FIX.sh dijalankan SEKALI di host, setelah template disalin,
+# sebelum xbps-src pkg. CWD = $VP/srcpkgs/<pkg>. Wajib idempoten.
+fix_run(){
+	local pkg="$1" phase="${2:-build}" t="$TPL/$1/template" fix="$VP/srcpkgs/$1/FIX.sh" v rv rc=0
+	[ -f "$fix" ] || return 0
+	v=$(tpl_field "$t" version); rv=$(tpl_field "$t" revision)
+	info "FIX: $pkg → FIX.sh ($phase)"
+	chmod +x "$fix" 2>/dev/null || true
+	( cd "$VP/srcpkgs/$pkg" && \
+	  T4N_PKG="$pkg" T4N_VERSION="$v" T4N_REVISION="${rv:-1}" T4N_PHASE="$phase" \
+	  T4N_VP="$VP" T4N_TPL="$TPL" T4N_REPO="$REPO_DIR" \
+	  T4N_HOST_ARCH="$HOST_ARCH" ./FIX.sh ) || rc=$?
+	if [ "$rc" -eq 0 ]; then ok "FIX: $pkg selesai"; return 0; fi
+	err "FIX: $pkg gagal (exit $rc)"
+	return 1
+}
+
+# Pulihkan file yang dimutasi FIX.sh ke kondisi upstream sebelum pull.
+fix_revert(){
+	local f
+	[ -d "$VP/.git" ] || return 0
+	for f in ${FIX_MUTABLE[@]+"${FIX_MUTABLE[@]}"}; do
+		[ -f "$VP/$f" ] || continue
+		git -C "$VP" diff --quiet -- "$f" 2>/dev/null && continue
+		git -C "$VP" checkout -- "$f" 2>/dev/null \
+			&& info "FIX: $f dipulihkan ke upstream" \
+			|| warn "FIX: gagal memulihkan $f"
+	done
+	return 0
+}
+
+# Pasca-sync: setelah fix_revert pohon pristine, SEMUA mutasi harus di-apply
+# ulang — bukan cuma paket yang template-nya berubah. Selalu return 0.
+fix_run_all(){
+	local d name n=0 bad=0
+	for d in "$TPL"/*/; do
+		name=$(basename "$d")
+		[ -f "$d/template" ] || continue
+		pkg_safe "$name" || continue
+		[ -f "$VP/srcpkgs/$name/FIX.sh" ] || continue
+		if fix_run "$name" sync; then n=$((n+1)); else bad=$((bad+1)); fi
+	done
+	[ "$bad" -eq 0 ] || warn "FIX: $bad script gagal saat sync — paket itu di-skip saat build"
+	[ "$n" -eq 0 ] || ok "FIX: $n script dijalankan"
+	return 0
 }
 
 # flags_for <arsitektur-target>
