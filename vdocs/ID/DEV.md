@@ -21,9 +21,18 @@ menghasilkan paket biner saja. Website ada di repositori terpisah (`repo-site`).
 4. **Rencana dulu, hapus terakhir.** Repodata + `.sig2` baru diupload sebelum
    asset lama dihapus, supaya client tidak pernah membaca indeks yang menunjuk
    file hilang.
-5. **Template tidak pernah di-`source`.** Berasal dari pihak lain. Parse dengan
-   `grep`/`sed`/regex. Job pemegang secret tidak boleh membaca template sama
-   sekali — itu alasan ia memakai `sparse-checkout: .github/workflows`.
+5. **Template tidak pernah di-`source`; `FIX.sh` justru dieksekusi.** Template
+   berasal dari pihak lain dan hanya diparse dengan `grep`/`sed`/regex.
+   `FIX.sh` (§15) adalah kebalikannya: skrip yang **dijalankan** di host. Artinya
+   `pkg-template/` kini zona *trusted*, bukan sekadar data. PR yang menambah atau
+   mengubah `FIX.sh` wajib direview manual — jangan auto-merge. Job pemegang
+   secret tetap memakai `sparse-checkout: .github/workflows`, sehingga `FIX.sh`
+   **tidak pernah berjalan di CI**.
+6. **File upstream yang dimutasi harus terdaftar.** `FIX.sh` hanya boleh mengubah
+   file tracked upstream yang ada di `FIX_MUTABLE` (`src/common.sh`). File itu
+   dipulihkan ke kondisi upstream sebelum `git pull --ff-only`, lalu di-apply
+   ulang sesudahnya. `etc/conf` **dilarang** masuk daftar itu — di situ
+   `XBPS_ALLOW_RESTRICTED=yes` disimpan (§15).
 
 ## 2. Struktur
 
@@ -36,7 +45,9 @@ repo-t4nos/
 │   └── gen-json.py             # per-tag: repodata + template → packages.json
 ├── json/<tag>/packages.json    # ×9, di-commit balik oleh CI
 ├── keys/key.pem.pub            # satu-satunya file key yang publik
-├── pkg-template/<pkg>/template # flat, tanpa folder kategori (saat ini: tpkg, zvc)
+├── pkg-template/<pkg>/         # flat, tanpa folder kategori
+│   ├── template                # wajib
+│   └── FIX.sh                  # opsional; dieksekusi sebelum build (§15)
 ├── vdev/
 │   ├── tools.sh                # dispatcher tipis
 │   ├── DNS-check.sh            # uji domain/Worker read-only (§13)
@@ -54,6 +65,9 @@ repo-t4nos/
 ├── CONTRIBUTING.md / CONTRIBUTING.ID.md   # direncanakan, belum ada
 └── README.md / README.ID.md
 ```
+
+Hook FIX.sh (`fix_run`, `fix_run_all`, `fix_revert`) tinggal di `env.sh`, **bukan**
+modul baru. Jumlah modul `vdev/src/` tetap 7 dan `tools.sh` tidak berubah.
 
 Hanya `*.yml` di `.github/workflows/` yang diparse sebagai workflow. File `.sh`
 dan `.py` di situ adalah helper biasa, ditaruh di sana karena dua alasan konkret:
@@ -258,6 +272,9 @@ vdev/tools.sh -f zvc    -a 'x86_64*'     # x86_64 glibc + musl
 Flag `-f` di `xbps-src` memaksa rebuild meskipun package sudah ada di cache. Berguna
 untuk perubahan besar di template atau retry setelah build gagal.
 
+Sebelum loop arsitektur, `tpl_stage` menyalin template lalu menjalankan `FIX.sh`
+paket itu sekali (§15). Gagal → paket di-skip, `rc=1`, lanjut ke paket berikutnya.
+
 ### Clean & Zap
 - `vdev/tools.sh -c` — jalankan `xbps-src clean` untuk membersihkan build artifacts
   (wrkdir, destdir), tapi masterdir tetap ada
@@ -277,6 +294,9 @@ vdev/tools.sh -b zvc    -a 'x86_64*'     # x86_64 glibc + musl
 
 Arsitektur yang diminta diiriskan dengan `archs` template; irisannya ditampilkan
 sebelum build. Paket `noarch` dibuild sekali, pada target pertama yang dipilih.
+
+Sebelum loop arsitektur, `tpl_stage` menyalin template lalu menjalankan `FIX.sh`
+paket itu sekali (§15). Gagal → paket di-skip, `rc=1`, lanjut ke paket berikutnya.
 
 ### Pemilihan flag (`src/env.sh: flags_for`) — diperbaiki dan diverifikasi 24 Nov 2026
 
@@ -331,57 +351,42 @@ bash -c '. vdev/src/common.sh; . vdev/src/template.sh; . vdev/src/env.sh
 
 ### Sync
 
-```sh
-vdev/tools.sh -sy
-```
+    vdev/tools.sh -sy
 
-`git pull --ff-only` pada `void-packages`, lalu menyalin template baru/berubah dari
-`pkg-template/` ke `void-packages/srcpkgs/`. Nama yang disalin dicatat di
-`void-packages/.git/t4n-staged` (di dalam `.git`, jadi tidak mengotori `git status`).
-Template yang kemudian **dihapus** dari `pkg-template/` dibersihkan dari `srcpkgs/` pada
-sync berikutnya; bila namanya ada di upstream Void, resep resmi dipulihkan lewat
-`git checkout`. Pelacakan dimulai sejak sync pertama dengan versi ini — salinan lama
-dari sebelum itu harus dibersihkan manual (`git -C void-packages status`).
+Urutan wajib, dan urutannya sendiri adalah bagian dari kontrak:
 
-Nama paket yang masuk ke operasi path divalidasi oleh `pkg_safe` (`name_safe` ditambah
-"tidak diawali `.` atau `-`"); nama tidak aman ditolak dengan error. `-b` memvalidasi
-semua nama dan keberadaan template **sebelum** clone/bootstrap `void-packages`.
+    fix_revert            → pulihkan file di FIX_MUTABLE ke kondisi upstream
+    git pull --ff-only    → tidak macet karena working tree bersih
+    _staged_prune         → buang salinan template yang sudah dihapus
+    salin template        → pkg-template/ → void-packages/srcpkgs/
+    fix_run_all           → apply ulang SEMUA FIX.sh (fase sync)
 
-### Upload
+`fix_revert` sebelum pull itu wajib: `common/shlibs` adalah file tracked upstream,
+dan `git pull --ff-only` menolak jalan kalau file itu kotor. `fix_run_all` sesudah
+copy juga wajib: setelah revert, pohon build kembali pristine, jadi kalau tidak
+di-apply ulang maka (a) `xbps-src pkg` manual gagal pkglint, dan (b) paket lain
+yang butuh SONAME paket tetangga ikut gagal — misalnya `iaito` yang memerlukan
+`libr_anal.so.6.2.6` punya `radare2`, padahal `tpl_stage iaito` tidak menyentuh
+`FIX.sh` radare2.
 
-```sh
-vdev/tools.sh -u tpkg
-```
+`fix_run_all` dijalankan **setelah** loop copy supaya kalau `FIX.sh`-nya sendiri
+ikut diperbarui dari repo, yang dijalankan versi baru. Kegagalan `FIX.sh` di fase
+sync hanya `warn`; sinkronisasi paket lain tetap lanjut.
 
-1. `gh auth status`: belum login → error jelas dan upload/trigger dilewati (exit 1).
-   Lalu cek akses write via `gh api repos/T4n-Labs/repo-t4nos --jq .permissions.push`;
-   kegagalan API dilaporkan apa adanya, tidak dianggap "tanpa izin".
-2. **Punya write:** mencocokkan file `.xbps` di `void-packages/hostdir/binpkgs`
-   dengan `pkgname` + subpackage dan `version_revision` template, mengarahkannya
-   ke tag (`noarch` → semua tag yang didukung; arsitektur di luar `archs` →
-   warning dan dilewati), upload dengan `--clobber`, lalu men-trigger `process.yml`
-   **sekali** dengan daftar tag yang tersentuh.
-3. **Tanpa write:** upload dan trigger dilewati, dengan pemberitahuan bahwa
-   maintainer akan build dan upload setelah PR di-merge.
-4. Dua-duanya tetap menawarkan `git push`, dan menawarkan buka PR kalau `origin`
-   bukan `T4n-Labs/repo-t4nos`. Tawaran aman tanpa TTY (EOF = "tidak") dan tidak
-   mengubah exit code setelah upload sukses.
+Nama yang disalin dicatat di `void-packages/.git/t4n-staged` (di dalam `.git`,
+jadi tidak mengotori `git status`). Template yang kemudian dihapus dari
+`pkg-template/` dibersihkan dari `srcpkgs/` pada sync berikutnya; bila namanya
+ada di upstream Void, resep resmi dipulihkan lewat `git checkout`. Entri
+`common/shlibs` miliknya ikut hilang karena `fix_revert` + `fix_run_all` hanya
+meng-apply paket yang masih ada.
 
-Hanya file yang cocok `version_revision` template yang diupload; build lama di
-`binpkgs` di-skip dengan warning. Template adalah sumber kebenaran, bukan "file
-terbaru di folder". Urutan penting: **edit template → build → upload**.
+Nama paket yang masuk ke operasi path divalidasi oleh `pkg_safe` (`name_safe`
+ditambah "tidak diawali `.` atau `-`"); nama tidak aman ditolak dengan error.
+`-b` memvalidasi semua nama dan keberadaan template sebelum clone/bootstrap.
 
-Meng-upload ulang biner **dengan nama sama** (rebuild tanpa naik `revision`) didukung:
-`--clobber` mengganti `.xbps`, dan CI mendeteksi `.xbps` yang lebih baru dari
-`.sig2`-nya lalu menandatangani ulang. Tetap naikkan `revision` untuk perubahan yang
-harus sampai ke pengguna — klien yang sudah menyimpan file bernama sama di cache tidak
-mengunduhnya lagi.
-
-Biner yang diupload **belum bertanda tangan**. CI yang menandatangani. Ada window
-singkat di mana asset sudah ada tapi `.sig2`-nya belum — jangan umumkan rilis
-sebelum workflow hijau. File `.sig2` lokal (dari kunci Anda sendiri) sengaja tidak
-diupload: tanda tangan dengan kunci berbeda gagal verifikasi di client. CI
-satu-satunya penanda tangan.
+Catatan: `git -C void-packages status` akan menampilkan `common/shlibs` sebagai
+modified selama ada paket dengan `FIX.sh`. Itu normal dan tidak bisa dihindari —
+file itu memang wajib diperbarui. Yang dijaga adalah agar pull tidak macet.
 
 ## 7. Pipeline CI/CD
 
@@ -578,6 +583,10 @@ luar itu dijawab 404 walaupun file-nya ada di release.
 - [ ] `json/<tag>/packages.json` memuat paket dengan `category: xbps` untuk arsitektur yang diharapkan (dan tampil di website)
 - [ ] `xbps-install -S && xbps-install <pkg>` sukses di sistem uji bersih
 - [ ] Versi lama hilang dari release tag (`gh release view <tag>`)
+- [ ] If the package ships a `FIX.sh`: idempotent (run twice, identical result),
+    writes no tracked file outside `FIX_MUTABLE`, does not hardcode the version
+- [ ] `grep -c ' <pkg>-<ver>_<rev>$' void-packages/common/shlibs` is stable before & after `-sy`
+- [ ] If the SONAME was bumped: reverse dependencies revbumped and rebuilt (§14)
 
 ## 11. Troubleshooting
 
@@ -597,6 +606,13 @@ luar itu dijawab 404 walaupun file-nya ada di release.
 | `commit json` warning 3× | branch protection menolak push bot; izinkan Founder + `github-actions` bypass, atau hapus syarat PR |
 | Website basi | indeks belum dibuat ulang; cek job `json` dan `commit` |
 | Domain terlihat bermasalah | jalankan `bash vdev/DNS-check.sh` dan cocokkan dengan §13 |
+| Baris `FIX:` tidak muncul di log | nama file bukan persis `FIX.sh` → `fix_run` no-op diam-diam (§15) |
+| `common/shlibs` membengkak tiap sync | `FIX.sh` tidak idempoten: append tanpa membuang entri lama |
+| `git pull --ff-only` gagal setelah ada `FIX.sh` | file yang dimutasi belum terdaftar di `FIX_MUTABLE` |
+| `XBPS_ALLOW_RESTRICTED` mati sendiri | `etc/conf` masuk `FIX_MUTABLE` → keluarkan (§15) |
+| `SONAME bump detected` / `please update common/shlibs` | entri belum ada; `shlib_provides` bukan pengganti (§14) |
+| Paket lain rusak setelah bump SONAME | revbump + rebuild paket itu (mis. `iaito`) (§14) |
+| `tools.sh` mati total, syntax error | cek `bash -n` per modul, bukan cuma `tools.sh` (§15) |
 
 ## 12. Status Implementasi
 Diperbarui 27 November 2026. Setiap baris "terverifikasi" punya bukti keluaran
@@ -619,6 +635,7 @@ perintah, uji di sandbox, atau log CI; yang lain ditandai eksplisit.
 | process-tag.sh: upload ulang nama sama, versi baru ditolak, run lanjutan tanpa churn, .sig2 yatim | harness stub (gh/xbps-* palsu), 25 Nov |
 | Perbaikan vdev/ (route_tags, menu 08/09, urutan validasi, pkg_safe, git_offer, sync) | uji reproduksi sebelum/sesudah (25 Nov) |
 | bash -n, sh -n, ast.parse, yaml.safe_load, JSON valid | keluaran perintah |
+| Hook `FIX.sh` jalur build (`-b`): `radare2-6.2.6_1` + `radare2-devel` x86_64 terbangun, pkglint lolos | log build (28 Nov) |
 
 ### Belum selesai / belum diterapkan
 
@@ -635,6 +652,9 @@ perintah, uji di sandbox, atau log CI; yang lain ditandai eksplisit.
 | `./tools` dan `./vdev/tools` (tanpa `.sh`) | `tools.sh` bisa me-resolve symlink, tetapi symlink-nya tidak ada di repo |
 | Aturan wajib `archs=noarch` | **belum diputuskan** — `tpkg` saat ini tanpa `archs` (§14) |
 | PyYAML di mesin dev | tidak terpasang → pakai probe struktural di §14 |
+| Hook `FIX.sh` jalur sync (`fix_run_all`) end-to-end | kode saja; uji `grep -c` sebelum/sesudah `-sy` (§15) |
+| `FIX.sh` untuk paket selain radare2 | belum ada pengguna lain; kontrak belum diuji lintas paket |
+| `FIX.sh` pada 9 arsitektur | baru x86_64 native yang dijalankan |
 
 Urutan tersisa: set `VOID_IMAGE_TAG` → verifikasi `--clobber`/`updated_at` di CI nyata →
 `xbps-install -S` di sistem bersih dengan conf **manual ke domain** → hardening
@@ -796,6 +816,173 @@ gh api repos/T4n-Labs/repo-t4nos/actions/workflows --jq '.workflows[]|{name,path
 
 Baris terakhir memvalidasi sisi GitHub: kalau `process.yml` muncul dengan
 `state: active`, GitHub berhasil mem-parse-nya.
+
+### `common/shlibs` wajib; `shlib_provides` bukan penggantinya
+
+    => ERROR: radare2-6.2.6_1: SONAME bump detected: libr_anal.so.5.9.8 -> libr_anal.so.6.2.6
+    => ERROR: radare2-6.2.6_1: please update common/shlibs with this line: "libr_anal.so.6.2.6 radare2-6.2.6_1"
+    => ERROR: radare2-6.2.6_1: all reverse dependencies should also be revbumped ...
+    => ERROR:    iaito-5.9.9_1
+    => ERROR:   in hook() at common/hooks/pre-pkg/99-pkglint.sh:199
+
+`common/shlibs` adalah registry global SONAME → package, dipakai untuk resolusi
+dependensi *dan* pelacakan reverse dependency. Hook `99-pkglint` meng-`grep` pola
+`<soname> <pkgname>-<version>_<revision>` secara harfiah di file itu; kalau tidak
+ada, build ditolak. Menaruh `shlib_provides` di template **tidak** melewati
+pemeriksaan ini — ia hanya menambah metadata *provides*, bukan registry.
+
+Konsekuensi untuk repo ini: mengedit `common/shlibs` itu wajib, dan file itu
+tracked upstream. Karena itu ada `FIX_MUTABLE` + `fix_revert` (§15), bukan
+sekadar skrip manual.
+
+Edit ke `common/shlibs` bersifat **persisten** — secara manual hanya perlu sekali
+per version bump, bukan setiap build. Framework tetap meng-apply ulang setiap
+kali supaya clone baru dan pohon pasca-sync selalu benar.
+
+Baris `all reverse dependencies should also be revbumped` bukan hiasan: paket
+yang menaut ke SONAME lama benar-benar rusak setelah bump. Naikkan `revision`
+paket itu lalu bangun ulang. Kalau paket tersebut tidak ada di `pkg-template/`,
+`-b` menolaknya — tambahkan dulu atau bangun dari `void-packages/srcpkgs/`.
+
+## 15. `FIX.sh` — Hook Per-Paket
+
+Sebagian paket butuh perbaikan **di luar template** agar `xbps-src` mau
+membangunnya. Kasus kanonik: `radare2` menaikkan SONAME, dan hook
+`pre-pkg/99-pkglint` menolak build sampai entri SONAME ada di `common/shlibs`
+(§14). Perbaikan seperti itu tidak bisa ditulis di template. Daripada maintainer
+menjalankan skrip manual setiap kali, tool menyediakan satu aturan umum.
+
+> Kalau sebuah paket punya `pkg-template/<pkg>/FIX.sh`, tool menjalankannya
+> sendiri — sekali per paket, di host, sebelum `xbps-src pkg <pkg>`.
+
+### Kontrak
+
+| Aspek | Aturan |
+| --- | --- |
+| Lokasi | `pkg-template/<pkg>/FIX.sh` — opsional |
+| Nama | persis `FIX.sh`. Nama lain diabaikan **tanpa log apa pun** |
+| Kapan | sekali per paket di `tpl_stage`, sebelum loop arsitektur |
+| Di mana | **host**, bukan di dalam masterdir/chroot |
+| CWD | `$VP/srcpkgs/<pkg>` → path relatif `../../common/shlibs` valid |
+| Interpreter | shebang dihormati; bit executable di-set otomatis pada salinan |
+| Wajib | **idempoten** — dijalankan ulang tiap build, force, dan sync |
+| Exit ≠ 0 | build/force: paket di-skip, `rc=1`. sync: `warn`, lanjut |
+
+Berjalan di host bukan pilihan desain bebas: di dalam chroot, `common/` bisa
+ter-mount read-only, jadi mutasi `common/shlibs` tidak dijamin berhasil.
+
+### Variabel lingkungan
+
+| Variabel | Isi |
+| --- | --- |
+| `T4N_PKG` | nama paket |
+| `T4N_VERSION` | field `version` template (diparse, bukan di-source) |
+| `T4N_REVISION` | field `revision`, default `1` |
+| `T4N_PHASE` | `build` atau `sync` |
+| `T4N_VP` | path absolut `void-packages` |
+| `T4N_TPL` | path absolut `pkg-template` |
+| `T4N_REPO` | path absolut `repo-t4nos` |
+| `T4N_HOST_ARCH` | arsitektur host |
+
+Karena versi dan revisi disuntikkan, `FIX.sh` tidak boleh meng-hardcode keduanya.
+Naik versi upstream cukup mengubah `version=` di template.
+
+### Kapan hook berjalan
+
+| Perintah | `FIX.sh` | Cakupan | Bila gagal |
+| --- | : ---: | --- | --- |
+| `-s` / `--setup` | tidak | belum ada yang ter-stage | — |
+| `-sy` / `--sync` | ya, pasca-copy | **semua** paket ter-stage | `warn`, sync lanjut |
+| `-b` / `--build` | ya, di `tpl_stage` | paket yang dibangun | skip paket, `rc=1` |
+| `-f` / `--force` | ya, di `tpl_stage` | paket yang di-force | skip paket, `rc=1` |
+| `-U` / `--update` | tidak | tidak menyentuh file tracked | — |
+| `-c` / `-z` | tidak | tidak menyentuh file tracked | — |
+| `-u` / `--upload` | tidak | tidak membangun | — |
+
+### `FIX_MUTABLE`
+
+`FIX_MUTABLE=(common/shlibs)` di `src/common.sh` adalah daftar file tracked
+upstream yang boleh dimutasi `FIX.sh`. `fix_revert` memulihkan hanya file di
+daftar itu sebelum pull — bukan "semua yang kotor".
+
+⚠️ **Jangan masukkan `etc/conf`.** `cmd_setup` menulis
+`XBPS_ALLOW_RESTRICTED=yes` ke sana; kalau ikut dipulihkan, restricted mati lagi.
+Itu sebabnya daftarnya allowlist eksplisit, bukan sapuan `git checkout -- .`.
+
+Kalau sebuah `FIX.sh` mengubah file tracked lain, daftarkan dulu. Tanpa itu,
+`git pull --ff-only` pada `-sy` berikutnya gagal dengan
+*"Your local changes would be overwritten by merge"*.
+
+### Batasan yang harus diterima
+
+- **Sekali per paket, bukan per arch.** Untuk SONAME ini tepat: `libr_anal.so.6.2.6`
+  sama di semua arsitektur. Kalau suatu saat ada perbaikan yang harus tahu target
+  arch (mis. patch khusus musl), kontrak ini **tidak cukup** — jangan dipaksa
+  masuk `FIX.sh`, buat hook terpisah.
+- **Kerja berat dilarang di jalur tanpa guard.** Karena hook juga jalan tiap
+  sync, jangan taruh download/generate/compile di situ. Kalau memang perlu:
+
+      [ "${T4N_PHASE:-build}" = build ] || exit 0
+
+- **Idempotensi wajib keras.** `fix_revert` hanya memulihkan file di
+  `FIX_MUTABLE`. `FIX.sh` yang append tanpa membuang entri lama akan membuat
+  `common/shlibs` membengkak setiap sync.
+
+### Contoh: `pkg-template/radare2/FIX.sh`
+
+```sh
+#!/bin/sh
+# FIX.sh — radare2: daftarkan SONAME ke common/shlibs.
+# Wajib: hook pre-pkg/99-pkglint menolak build kalau entri tidak ada (§14).
+# Idempoten: entri lama milik radare2 dibuang, lalu ditulis ulang.
+set -eu
+
+# fallback supaya bisa juga dijalankan manual dari folder ini
+: "${T4N_PKG:=radare2}"
+: "${T4N_VERSION:=$(sed -n 's/^version=//p' template)}"
+: "${T4N_REVISION:=$(sed -n 's/^revision=//p' template)}"
+map="${T4N_VP:-../..}/common/shlibs"
+pkg="${T4N_PKG}-${T4N_VERSION}_${T4N_REVISION:-1}"
+
+[ -f "$map" ] || { echo "FIX: tidak ada $map" >&2; exit 1; }
+
+sed -i -E '/^(libr_[a-z0-9_]+|libsdb)\.so\.[0-9.]+[[:blank:]]+radare2-/d' "$map"
+for l in core config cons util flag arch asm bin anal lang debug egg bp \
+         search io socket syscall fs magic reg main muta esil; do
+	printf 'libr_%s.so.%s %s\n' "$l" "$T4N_VERSION" "$pkg"
+done >> "$map"
+printf 'libsdb.so.2.6.2 %s\n' "$pkg" >> "$map"
+```
+
+24 entri: 23 `libr_*` + `libsdb`. `libsdb` versinya sendiri (`2.6.2`), bukan
+versi radare2 — jangan di-parameterisasi.
+
+### Verifikasi
+
+```bash
+# 1. syntax semua modul (bash -n tools.sh TIDAK memeriksa file yang di-source)
+for f in vdev/tools.sh vdev/src/*.sh; do bash -n "$f" || echo "ERR: $f"; done
+
+# 2. hook benar-benar menemukan file-nya
+ls -l pkg-template/*/FIX.sh
+
+# 3. idempotensi: angka harus sama sebelum dan sesudah sync
+grep -c ' radare2-6.2.6_1$' void-packages/common/shlibs   # 24
+./vdev/tools.sh -sy
+grep -c ' radare2-6.2.6_1$' void-packages/common/shlibs   # harus tetap 24
+```
+
+Hasil yang diharapkan dari `-sy`:
+
+    [INFO] FIX: common/shlibs dipulihkan ke upstream
+    [INFO] git pull void-packages...
+    [INFO] FIX: radare2 → FIX.sh (sync)
+    [OK] FIX: radare2 selesai
+    [OK] FIX: 1 script dijalankan
+
+Angka jadi **0** → `fix_run_all` belum dipanggil di `cmd_sync`.
+Angka jadi **48** → `sed` pembuang entri lama tidak jalan.
+Baris `FIX:` tidak muncul sama sekali → nama file bukan `FIX.sh`.
 
 ---
 

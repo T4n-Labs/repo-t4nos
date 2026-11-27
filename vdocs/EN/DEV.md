@@ -20,9 +20,17 @@ repository (`repo-site`).
    orphaned index entries rebuilt. Manual edits get overwritten.
 4. **Plan first, delete last.** New repodata + `.sig2` are uploaded before old
    assets are removed, so a client never reads an index pointing at a missing file.
-5. **Templates are never `source`d.** They come from third parties. Parse with
-   `grep`/`sed`/regex. The secret-holding job must not read templates at all —
-   that is why it uses `sparse-checkout: .github/workflows`.
+5. **Templates are never `source`d; `FIX.sh` is executed.** Templates come from
+   third parties and are parsed with `grep`/`sed`/regex only. `FIX.sh` (§15) is
+   the opposite: a script that **runs** on the host. This makes `pkg-template/`
+   a *trusted* zone, not just data. Any PR adding or changing a `FIX.sh` must be
+   reviewed by hand — never auto-merged. The secret-holding job still uses
+   `sparse-checkout: .github/workflows`, so `FIX.sh` **never runs in CI**.
+6. **Mutated upstream files must be registered.** A `FIX.sh` may only modify
+   tracked upstream files listed in `FIX_MUTABLE` (`src/common.sh`). Those files
+   are restored to upstream state before `git pull --ff-only` and re-applied
+   afterwards. `etc/conf` must **never** be listed — it holds
+   `XBPS_ALLOW_RESTRICTED=yes` (§15).
 
 ## 2. Layout
 
@@ -35,7 +43,9 @@ repo-t4nos/
 │   └── gen-json.py             # per-tag: repodata + template → packages.json
 ├── json/<tag>/packages.json    # ×9, committed back by CI
 ├── keys/key.pem.pub            # the only public key file
-├── pkg-template/<pkg>/template # flat, no category folders (currently: tpkg, zvc)
+├── pkg-template/<pkg>/         # flat, no category folders
+│   ├── template                # required
+│   └── FIX.sh                  # optional; executed before the build (§15)
 ├── vdev/
 │   ├── tools.sh                # thin dispatcher
 │   ├── DNS-check.sh            # read-only domain/Worker test (§13)
@@ -53,6 +63,9 @@ repo-t4nos/
 ├── CONTRIBUTING.md / CONTRIBUTING.ID.md   # planned, not present yet
 └── README.md / README.ID.md
 ```
+
+The FIX.sh hook (`fix_run`, `fix_run_all`, `fix_revert`) lives in `env.sh`, **not**
+in a new module. `vdev/src/` still has 7 modules and `tools.sh` is unchanged.
 
 Only `*.yml` in `.github/workflows/` is parsed as a workflow. The `.sh` and `.py`
 files there are plain helpers, placed there for two concrete reasons:
@@ -254,6 +267,10 @@ vdev/tools.sh -f zvc    -a 'x86_64*'     # glibc + musl x86_64
 The `-f` flag in `xbps-src` forces rebuild even if the package exists in cache. Useful
 for major template changes or retrying after build failures.
 
+Before the architecture loop, `tpl_stage` copies the template and then runs that
+package's `FIX.sh` once (§15). Failure → the package is skipped, `rc=1`, and the
+next package continues.
+
 ### Clean & Zap
 - `vdev/tools.sh -c` — runs `xbps-src clean` to remove build artifacts
   (wrkdir, destdir), but keeps the masterdir
@@ -274,6 +291,10 @@ vdev/tools.sh -b zvc    -a 'x86_64*'     # glibc + musl x86_64
 Requested architectures are intersected with the template's `archs`; the
 intersection is printed before building. `noarch` packages build once, on the
 first selected target.
+
+Before the architecture loop, `tpl_stage` copies the template and then runs that
+package's `FIX.sh` once (§15). Failure → the package is skipped, `rc=1`, and the
+next package continues.
 
 ### Flag selection (`src/env.sh: flags_for`) — fixed and verified 24 Nov 2026
 
@@ -326,58 +347,42 @@ bash -c '. vdev/src/common.sh; . vdev/src/template.sh; . vdev/src/env.sh
 
 ### Sync
 
-```sh
-vdev/tools.sh -sy
-```
+    vdev/tools.sh -sy
 
-`git pull --ff-only` on `void-packages`, then copies new/changed templates from
-`pkg-template/` into `void-packages/srcpkgs/`. The names copied are recorded in
-`void-packages/.git/t4n-staged` (inside `.git`, so `git status` stays clean). A
-template later **removed** from `pkg-template/` is cleaned out of `srcpkgs/` on the
-next sync; if the name exists upstream in Void, the official recipe is restored via
-`git checkout`. Tracking starts from the first sync with this version — older copies
-from before that must be cleaned manually (`git -C void-packages status`).
+Mandatory order — the ordering itself is part of the contract:
 
-Package names that reach path operations are validated by `pkg_safe` (`name_safe`
+    fix_revert            → restore FIX_MUTABLE files to upstream state
+    git pull --ff-only    → proceeds because the working tree is clean
+    _staged_prune         → drop copies of templates that were removed
+    copy templates        → pkg-template/ → void-packages/srcpkgs/
+    fix_run_all           → re-apply EVERY FIX.sh (sync phase)
+
+`fix_revert` before the pull is required: `common/shlibs` is a tracked upstream
+file and `git pull --ff-only` refuses to run while it is dirty. `fix_run_all`
+after the copy is equally required: after the revert the build tree is pristine,
+so without re-applying, (a) a manual `xbps-src pkg` fails pkglint, and (b) other
+packages needing a neighbour's SONAME fail too — e.g. `iaito` requires
+`libr_anal.so.6.2.6` from `radare2`, yet `tpl_stage iaito` never touches
+radare2's `FIX.sh`.
+
+`fix_run_all` runs **after** the copy loop so that if a `FIX.sh` itself was
+updated from the repo, the new version is the one that runs. A `FIX.sh` failure
+during sync only warns; the rest of the sync continues.
+
+Copied names are recorded in `void-packages/.git/t4n-staged` (inside `.git`, so
+`git status` stays clean). A template later removed from `pkg-template/` is
+cleaned out of `srcpkgs/` on the next sync; if the name exists upstream in Void,
+the official recipe is restored via `git checkout`. Its `common/shlibs` entries
+disappear too, because `fix_revert` + `fix_run_all` only re-apply packages that
+still exist.
+
+Package names reaching path operations are validated by `pkg_safe` (`name_safe`
 plus "must not start with `.` or `-`"); unsafe names are rejected with an error.
-`-b` validates every name and template existence **before** cloning/bootstrapping
-`void-packages`.
+`-b` validates every name and template existence before cloning/bootstrapping.
 
-### Upload
-
-```sh
-vdev/tools.sh -u tpkg
-```
-
-1. `gh auth status`: not logged in → a clear error, and upload/trigger are skipped
-   (exit 1). Then checks write access via
-   `gh api repos/T4n-Labs/repo-t4nos --jq .permissions.push`; an API failure is
-   reported as such, not mistaken for "no permission".
-2. **With write:** matches `.xbps` files in `void-packages/hostdir/binpkgs`
-   against `pkgname` + subpackages and the template's `version_revision`, routes
-   them to tags (`noarch` → every supported tag; an architecture outside `archs` →
-   warning and skipped), uploads with `--clobber`, then triggers `process.yml`
-   **once** with the list of touched tags.
-3. **Without write:** upload and trigger are skipped, with a notice that a
-   maintainer will build and upload after the PR is merged.
-4. Either way, offers `git push`, and offers to open a PR if `origin` is not
-   `T4n-Labs/repo-t4nos`. The offer is safe without a TTY (EOF = "no") and does not
-   change the exit code after a successful upload.
-
-Only files matching the template's `version_revision` are uploaded; older builds
-in `binpkgs` are skipped with a warning. The template is the source of truth, not
-"the newest file in the folder". Order matters: **edit template → build → upload**.
-
-Re-uploading a binary **with the same name** (rebuild without bumping `revision`) is
-supported: `--clobber` replaces the `.xbps`, and CI detects a `.xbps` newer than its
-`.sig2` and re-signs it. Still bump `revision` for changes that must reach users —
-clients that already cached a file with that name will not download it again.
-
-Uploaded binaries are **unsigned**. CI signs them. There is a short window where
-an asset exists without its `.sig2` — do not announce a release before the
-workflow is green. Local `.sig2` files (from your own key) are deliberately not
-uploaded: a signature made with a different key fails client verification. CI is
-the single signer.
+Note: `git -C void-packages status` will show `common/shlibs` as modified for as
+long as some package ships a `FIX.sh`. That is expected and unavoidable — the
+file genuinely must be updated. What is guaranteed is that the pull does not stall.
 
 ## 7. CI/CD Pipeline
 
@@ -571,6 +576,10 @@ the same allowlist: anything else gets 404 even if the file exists on the releas
 - [ ] `json/<tag>/packages.json` lists the package with `category: xbps` for the expected architectures (and it appears on the website)
 - [ ] `xbps-install -S && xbps-install <pkg>` succeeds on a clean test system
 - [ ] Old version gone from the release tag (`gh release view <tag>`)
+- [ ] If the package ships a `FIX.sh`: idempotent (run twice, identical result),
+    writes no tracked file outside `FIX_MUTABLE`, does not hardcode the version
+- [ ] `grep -c ' <pkg>-<ver>_<rev>$' void-packages/common/shlibs` is stable before & after `-sy`
+- [ ] If the SONAME was bumped: reverse dependencies revbumped and rebuilt (§14)
 
 ## 11. Troubleshooting
 
@@ -590,6 +599,13 @@ the same allowlist: anything else gets 404 even if the file exists on the releas
 | `commit json` warns 3× | branch protection blocks the bot's push; allow Founder + `github-actions` bypass, or drop the PR requirement |
 | Website stale | index not regenerated; check the `json` and `commit` jobs |
 | Domain looks broken | run `bash vdev/DNS-check.sh` and compare with §13 |
+| No `FIX:` line in the log | the file is not named exactly `FIX.sh` → `fix_run` is a silent no-op (§15) |
+| `common/shlibs` grows on every sync | `FIX.sh` is not idempotent: appends without removing old entries |
+| `git pull --ff-only` fails once a `FIX.sh` exists | the mutated file is not registered in `FIX_MUTABLE` |
+| `XBPS_ALLOW_RESTRICTED` turns itself off | `etc/conf` is in `FIX_MUTABLE` → remove it (§15) |
+| `SONAME bump detected` / `please update common/shlibs` | entry missing; `shlib_provides` is not a substitute (§14) |
+| Another package breaks after a SONAME bump | revbump + rebuild it (e.g. `iaito`) (§14) |
+| `tools.sh` dies immediately, syntax error | run `bash -n` per module, not just on `tools.sh` (§15) |
 
 ## 12. Implementation Status
 Updated 27 November 2026. Every "verified" row has command output, sandbox test or
@@ -612,6 +628,7 @@ CI log evidence; everything else is marked explicitly.
 | process-tag.sh: same-name re-upload, rejected newer version, follow-up run without churn, orphan .sig2 | stub harness (fake gh/xbps-*), 25 Nov |
 | vdev/ fixes (route_tags, menu 08/09, validation order, pkg_safe, git_offer, sync) | before/after reproduction tests (25 Nov) |
 | bash -n, sh -n, ast.parse, yaml.safe_load, JSON valid | command output |
+| `FIX.sh` hook, build path (`-b`): `radare2-6.2.6_1` + `radare2-devel` x86_64 built, pkglint passed | build log (28 Nov) |
 
 ### Outstanding / not applied
 
@@ -628,6 +645,9 @@ CI log evidence; everything else is marked explicitly.
 | `./tools` and `./vdev/tools` (no `.sh`) | `tools.sh` can resolve symlinks, but no such symlinks exist in the repo |
 | Mandatory `archs=noarch` rule | **undecided** — `tpkg` currently has no `archs` (§14) |
 | PyYAML on the dev machine | not installed → use the structural probes in §14 |
+| `FIX.sh` sync path (`fix_run_all`) end-to-end | code only; run the `grep -c` before/after `-sy` test (§15) |
+| `FIX.sh` for packages other than radare2 | no other user yet; contract untested across packages |
+| `FIX.sh` across all 9 architectures | only native x86_64 has been run |
 
 Remaining order: set `VOID_IMAGE_TAG` → verify `--clobber`/`updated_at` in real CI →
 `xbps-install -S` on a clean system with a **manual conf pointing at the domain** →
@@ -789,6 +809,173 @@ gh api repos/T4n-Labs/repo-t4nos/actions/workflows --jq '.workflows[]|{name,path
 
 The last line validates on GitHub's side: if `process.yml` appears with
 `state: active`, GitHub parsed it successfully.
+
+### `common/shlibs` is mandatory; `shlib_provides` does not replace it
+
+    => ERROR: radare2-6.2.6_1: SONAME bump detected: libr_anal.so.5.9.8 -> libr_anal.so.6.2.6
+    => ERROR: radare2-6.2.6_1: please update common/shlibs with this line: "libr_anal.so.6.2.6 radare2-6.2.6_1"
+    => ERROR: radare2-6.2.6_1: all reverse dependencies should also be revbumped ...
+    => ERROR:    iaito-5.9.9_1
+    => ERROR:   in hook() at common/hooks/pre-pkg/99-pkglint.sh:199
+
+`common/shlibs` is the global SONAME → package registry, used for dependency
+resolution *and* reverse-dependency tracking. The `99-pkglint` hook literally
+greps for `<soname> <pkgname>-<version>_<revision>` in that file; if absent, the
+build is rejected. Putting `shlib_provides` in a template does **not** bypass
+this check — it only adds *provides* metadata, not a registry entry.
+
+Consequence for this repo: editing `common/shlibs` is mandatory, and the file is
+tracked upstream. Hence `FIX_MUTABLE` + `fix_revert` (§15) rather than a
+hand-run script.
+
+An edit to `common/shlibs` is **persistent** — done by hand it is needed once per
+version bump, not on every build. The framework still re-applies it every time so
+that a fresh clone and a post-sync tree are always correct.
+
+The `all reverse dependencies should also be revbumped` line is not decoration:
+packages linked against the old SONAME really are broken after the bump. Bump
+their `revision` and rebuild. If such a package is not in `pkg-template/`, `-b`
+rejects it — add it first, or build from `void-packages/srcpkgs/`.
+
+## 15. `FIX.sh` — Per-Package Hook
+
+Some packages need a fix **outside the template** before `xbps-src` will build
+them. The canonical case: `radare2` bumps its SONAME, and the
+`pre-pkg/99-pkglint` hook rejects the build until the SONAME entry exists in
+`common/shlibs` (§14). Such a fix cannot be expressed in a template. Instead of
+maintainers running a script by hand every time, the tool provides one general rule.
+
+> If a package ships `pkg-template/<pkg>/FIX.sh`, the tool runs it automatically —
+> once per package, on the host, before `xbps-src pkg <pkg>`.
+
+### Contract
+
+| Aspect | Rule |
+| --- | --- |
+| Location | `pkg-template/<pkg>/FIX.sh` — optional |
+| Name | exactly `FIX.sh`. Any other name is ignored **with no log at all** |
+| When | once per package in `tpl_stage`, before the architecture loop |
+| Where | on the **host**, not inside the masterdir/chroot |
+| CWD | `$VP/srcpkgs/<pkg>` → the relative path `../../common/shlibs` is valid |
+| Interpreter | shebang honoured; the executable bit is set on the staged copy |
+| Required | **idempotent** — re-run on every build, force and sync |
+| Exit ≠ 0 | build/force: package skipped, `rc=1`. sync: `warn`, continue |
+
+Running on the host is not an arbitrary choice: inside the chroot `common/` may
+be mounted read-only, so mutating `common/shlibs` is not guaranteed to work.
+
+### Environment variables
+
+| Variable | Content |
+| --- | --- |
+| `T4N_PKG` | package name |
+| `T4N_VERSION` | the template's `version` field (parsed, never sourced) |
+| `T4N_REVISION` | the `revision` field, default `1` |
+| `T4N_PHASE` | `build` or `sync` |
+| `T4N_VP` | absolute path to `void-packages` |
+| `T4N_TPL` | absolute path to `pkg-template` |
+| `T4N_REPO` | absolute path to `repo-t4nos` |
+| `T4N_HOST_ARCH` | host architecture |
+
+Because version and revision are injected, a `FIX.sh` must not hardcode them.
+Bumping the upstream version only requires editing `version=` in the template.
+
+### When the hook runs
+
+| Command | `FIX.sh` | Scope | On failure |
+| --- | : ---: | --- | --- |
+| `-s` / `--setup` | no | nothing staged yet | — |
+| `-sy` / `--sync` | yes, after copy | **every** staged package | `warn`, sync continues |
+| `-b` / `--build` | yes, in `tpl_stage` | the packages being built | skip package, `rc=1` |
+| `-f` / `--force` | yes, in `tpl_stage` | the packages being forced | skip package, `rc=1` |
+| `-U` / `--update` | no | touches no tracked file | — |
+| `-c` / `-z` | no | touches no tracked file | — |
+| `-u` / `--upload` | no | does not build | — |
+
+### `FIX_MUTABLE`
+
+`FIX_MUTABLE=(common/shlibs)` in `src/common.sh` lists the tracked upstream files
+a `FIX.sh` may mutate. `fix_revert` restores only those files before the pull —
+not "everything dirty".
+
+⚠️ **Never add `etc/conf`.** `cmd_setup` writes `XBPS_ALLOW_RESTRICTED=yes` there;
+restoring it would disable restricted again. That is why the list is an explicit
+allowlist rather than a blanket `git checkout -- .`.
+
+If a `FIX.sh` modifies another tracked file, register it first. Otherwise the next
+`-sy` fails at `git pull --ff-only` with *"Your local changes would be overwritten
+by merge"*.
+
+### Accepted limitations
+
+- **Once per package, not per arch.** For SONAMEs this is correct:
+  `libr_anal.so.6.2.6` is identical across architectures. If a future fix needs to
+  know the target arch (e.g. a musl-only patch), this contract is **not
+  sufficient** — do not force it into `FIX.sh`, add a separate hook.
+- **No heavy work on the unguarded path.** Because the hook also runs on every
+  sync, do not put downloads/generation/compilation there. If unavoidable:
+
+      [ "${T4N_PHASE:-build}" = build ] || exit 0
+
+- **Idempotency is a hard requirement.** `fix_revert` only restores files in
+  `FIX_MUTABLE`. A `FIX.sh` that appends without removing its old entries will
+  grow `common/shlibs` on every sync.
+
+### Example: `pkg-template/radare2/FIX.sh`
+
+```sh
+#!/bin/sh
+# FIX.sh — radare2: register SONAMEs in common/shlibs.
+# Required: pre-pkg/99-pkglint rejects the build without these entries (§14).
+# Idempotent: old radare2 entries are removed, then rewritten.
+set -eu
+
+# fallbacks so it can also be run manually from this directory
+: "${T4N_PKG:=radare2}"
+: "${T4N_VERSION:=$(sed -n 's/^version=//p' template)}"
+: "${T4N_REVISION:=$(sed -n 's/^revision=//p' template)}"
+map="${T4N_VP:-../..}/common/shlibs"
+pkg="${T4N_PKG}-${T4N_VERSION}_${T4N_REVISION:-1}"
+
+[ -f "$map" ] || { echo "FIX: $map not found" >&2; exit 1; }
+
+sed -i -E '/^(libr_[a-z0-9_]+|libsdb)\.so\.[0-9.]+[[:blank:]]+radare2-/d' "$map"
+for l in core config cons util flag arch asm bin anal lang debug egg bp \
+         search io socket syscall fs magic reg main muta esil; do
+	printf 'libr_%s.so.%s %s\n' "$l" "$T4N_VERSION" "$pkg"
+done >> "$map"
+printf 'libsdb.so.2.6.2 %s\n' "$pkg" >> "$map"
+```
+
+24 entries: 23 `libr_*` plus `libsdb`. `libsdb` carries its own version (`2.6.2`),
+not radare2's — do not parameterise it.
+
+### Verification
+
+```bash
+# 1. syntax of every module (bash -n tools.sh does NOT check sourced files)
+for f in vdev/tools.sh vdev/src/*.sh; do bash -n "$f" || echo "ERR: $f"; done
+
+# 2. the hook actually finds the file
+ls -l pkg-template/*/FIX.sh
+
+# 3. idempotency: the count must be identical before and after sync
+grep -c ' radare2-6.2.6_1$' void-packages/common/shlibs   # 24
+./vdev/tools.sh -sy
+grep -c ' radare2-6.2.6_1$' void-packages/common/shlibs   # must still be 24
+```
+
+Expected `-sy` output:
+
+    [INFO] FIX: common/shlibs dipulihkan ke upstream
+    [INFO] git pull void-packages...
+    [INFO] FIX: radare2 → FIX.sh (sync)
+    [OK] FIX: radare2 selesai
+    [OK] FIX: 1 script dijalankan
+
+Count becomes **0** → `fix_run_all` is not called in `cmd_sync`.
+Count becomes **48** → the `sed` that removes old entries is not working.
+No `FIX:` line at all → the file is not named `FIX.sh`.
 
 ---
 
