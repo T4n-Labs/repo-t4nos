@@ -24,8 +24,8 @@
     "archs": [
       "x86_64"
     ],
-    "size": null,
-    "category": "template",
+    "size": 4971827,
+    "category": "xbps",
     "desc": "Distribution-independent installer framework",
     "homepage": "https://calamares.io",
     "maintainer": "Naz <ndpm13@ch-naseem.com>",
