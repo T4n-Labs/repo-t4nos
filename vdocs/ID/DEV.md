@@ -224,6 +224,7 @@ side effect, jadi CI dan Let-X bisa memakainya ulang dengan aman.
 ```sh
 vdev/tools.sh -s              # clone void-packages + binary-bootstrap
 vdev/tools.sh -sy             # git pull + salin template baru/berubah
+vdev/tools.sh -U              # jalankan xbps-src bootstrap-update
 vdev/tools.sh -b <pkg>        # build
 vdev/tools.sh -u <pkg>        # upload + trigger CI, lalu tawarkan push/PR
 ```

@@ -220,6 +220,7 @@ Let-X can reuse them safely.
 ```sh
 vdev/tools.sh -s              # clone void-packages + binary-bootstrap
 vdev/tools.sh -sy             # git pull + copy new/changed templates
+vdev/tools.sh -U              # run xbps-src bootstrap-update
 vdev/tools.sh -b <pkg>        # build
 vdev/tools.sh -u <pkg>        # upload + trigger CI, then offer push/PR
 ```
