@@ -19,18 +19,21 @@ done
 unset _m
 
 usage(){
-    cat >&2 <<EOF
-T4n OS developer tool (xbps-src)
-  -s,  --setup              clone void-packages (full) + binary-bootstrap
-  -sy, --sync               git pull + salin template baru/berubah
-  -U,  --update             jalankan xbps-src bootstrap-update
-  -b,  --build [pkg...] [-a arch...|all|'x86_64*']
-  -u,  --upload [pkg...]    upload ke tag + trigger CI, lalu push/PR
-       search <query>       cari template (nama atau deskripsi) + info detail
-  -h,  --help
+cat >&2 <<EOF
+  T4n OS developer tool (xbps-src)
+    -s,  --setup              clone void-packages (full) + binary-bootstrap 9 archs + enable restricted
+    -sy, --sync               git pull + salin template baru/berubah
+    -U,  --update             jalankan xbps-src bootstrap-update untuk semua archs
+    -b,  --build [pkg...] [-a arch...|all|'x86_64*']
+    -f,  --force [pkg...] [-a arch...|all|'x86_64*']  force rebuild (xbps-src -f)
+    -c,  --clean              jalankan xbps-src clean (bersihkan build artifacts)
+    -z,  --zap                jalankan xbps-src zap (hapus masterdir)
+    -u,  --upload [pkg...]    upload ke tag + trigger CI, lalu push/PR
+    search <query>       cari template (nama atau deskripsi) + info detail
+    -h,  --help
 
-Host: $HOST_ARCH
-Tag : ${ALL[*]}
+  Host: $HOST_ARCH
+  Tag : ${ALL[*]}
 EOF
 }
 
@@ -39,6 +42,9 @@ case "${1:-}" in
     -sy|--sync)      cmd_sync ;;
     -U|--update)     cmd_update ;;
     -b|--build)      shift; cmd_build "$@" ;;
+    -f|--force)      shift; cmd_force "$@" ;;
+    -c|--clean)      cmd_clean ;;
+    -z|--zap)        cmd_zap ;;
     -u|--upload)     shift; cmd_upload "$@" ;;
     search)          shift; cmd_search "$@" ;;
     -h|--help|"")    usage ;;

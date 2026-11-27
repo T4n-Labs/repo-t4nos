@@ -212,18 +212,53 @@ Conventions:
   build (§14).
 
 ## 6. Developer Workflow
-
 `vdev/tools.sh` is a thin dispatcher; all logic lives in `vdev/src/*.sh`. Those
 modules define functions only — sourcing them has no side effects, so CI and
 Let-X can reuse them safely.
 
-```sh
-vdev/tools.sh -s              # clone void-packages + binary-bootstrap
+```
+vdev/tools.sh -s              # clone void-packages + binary-bootstrap 9 archs + enable restricted
 vdev/tools.sh -sy             # git pull + copy new/changed templates
-vdev/tools.sh -U              # run xbps-src bootstrap-update
+vdev/tools.sh -U              # run xbps-src bootstrap-update for all archs
 vdev/tools.sh -b <pkg>        # build
+vdev/tools.sh -f <pkg>        # force rebuild (xbps-src -f)
+vdev/tools.sh -c              # clean build artifacts (xbps-src clean)
+vdev/tools.sh -z              # remove masterdir (xbps-src zap)
 vdev/tools.sh -u <pkg>        # upload + trigger CI, then offer push/PR
 ```
+
+### Setup
+`vdev/tools.sh -s` now prepares **all 9 architectures** at once:
+- Clone void-packages (full history)
+- Binary-bootstrap for `x86_64`, `x86_64-musl`, `aarch64`, `aarch64-musl`, `armv6l`, `armv6l-musl`, `armv7l`, `armv7l-musl`, `i686`
+- Automatically enables `XBPS_ALLOW_RESTRICTED=yes` in `$VP/etc/conf`
+
+Existing masterdirs are skipped (not re-bootstrapped).
+
+### Update
+`vdev/tools.sh -U` performs:
+1. `git pull --ff-only` on void-packages
+2. `xbps-src -A <arch> bootstrap-update` for each existing masterdir
+
+### Force Build
+`vdev/tools.sh -f` follows the same pattern as `-b`, but forces a rebuild from scratch:
+
+```
+vdev/tools.sh -f                          # interactive
+vdev/tools.sh -f tpkg zvc                 # several packages
+vdev/tools.sh -f tpkg   -a aarch64       # one architecture
+vdev/tools.sh -f tpkg   -a all           # all supported
+vdev/tools.sh -f zvc    -a 'x86_64*'     # glibc + musl x86_64
+```
+
+The `-f` flag in `xbps-src` forces rebuild even if the package exists in cache. Useful
+for major template changes or retrying after build failures.
+
+### Clean & Zap
+- `vdev/tools.sh -c` — runs `xbps-src clean` to remove build artifacts
+  (wrkdir, destdir), but keeps the masterdir
+- `vdev/tools.sh -z` — runs `xbps-src zap` to remove **all masterdirs**.
+  After zap, you need to run `-s` again to re-bootstrap (can take a while)
 
 ### Build
 
@@ -557,24 +592,26 @@ the same allowlist: anything else gets 404 even if the file exists on the releas
 | Domain looks broken | run `bash vdev/DNS-check.sh` and compare with §13 |
 
 ## 12. Implementation Status
-
-Updated 25 November 2026. Every "verified" row has command output, sandbox test or
+Updated 27 November 2026. Every "verified" row has command output, sandbox test or
 CI log evidence; everything else is marked explicitly.
 
 ### Verified
-
 | Item | Evidence |
-|---|---|
-| `flags_for` correct for the 9 targets from an `x86_64` host; `x86_64-musl`, `i686`, `aarch64` hosts checked by overriding `HOST_ARCH` | test output (25 Nov), matches the §6 table |
-| **Signing works** — tags hold `.xbps` + `.sig2` + `<tag>-repodata` | Releases screenshot (`tpkg-1.1.0_1`, then `_2`) (24 Nov) |
-| `FINGERPRINT` in `setup.sh` = MD5 of the `keys/key.pem.pub` blob | recomputed (25 Nov) |
-| `json/<tag>/packages.json` ×9 already committed by CI | `ls json/*` |
-| `.github/workflows/` = 3 files; `vdev/src/` = 7 modules | `ls -1` |
-| `process.yml` = 4 jobs; `json` step uses `shell: bash`; per-job `permissions`; actions pinned to SHAs | `grep` + `yaml.safe_load` |
-| Bash/awk ≡ Python parser (fields and `archs`), no globbing against cwd | parity test, 56 cases (25 Nov) |
-| `process-tag.sh`: same-name re-upload, rejected newer version, follow-up run without churn, orphan `.sig2` | stub harness (fake `gh`/`xbps-*`), 25 Nov |
-| `vdev/` fixes (`route_tags`, menu `08`/`09`, validation order, `pkg_safe`, `git_offer`, sync) | before/after reproduction tests (25 Nov) |
-| `bash -n`, `sh -n`, `ast.parse`, `yaml.safe_load`, JSON valid | command output |
+| --- | --- |
+| `cmd_setup` bootstraps 9 archs + enables restricted | code + manual test (27 Nov) |
+| `cmd_update` pulls + bootstrap-updates 9 archs | code + manual test (27 Nov) |
+| `cmd_force` follows `cmd_build` pattern with `-f` flag | code + manual test (27 Nov) |
+| `cmd_clean` and `cmd_zap` wrap xbps-src commands | code (27 Nov) |
+| flags_for correct for the 9 targets from an x86_64 host; x86_64-musl, i686, aarch64 hosts checked by overriding HOST_ARCH | test output (25 Nov), matches the §6 table |
+| Signing works — tags hold .xbps + .sig2 + <tag>-repodata | Releases screenshot (tpkg-1.1.0_1, then _2) (24 Nov) |
+| FINGERPRINT in setup.sh = MD5 of the keys/key.pem.pub blob | recomputed (25 Nov) |
+| json/<tag>/packages.json ×9 already committed by CI | ls json/* |
+| .github/workflows/ = 3 files; vdev/src/ = 7 modules | ls -1 |
+| process.yml = 4 jobs; json step uses shell: bash; per-job permissions; actions pinned to SHAs | grep + yaml.safe_load |
+| Bash/awk ≡ Python parser (fields and archs), no globbing against cwd | parity test, 56 cases (25 Nov) |
+| process-tag.sh: same-name re-upload, rejected newer version, follow-up run without churn, orphan .sig2 | stub harness (fake gh/xbps-*), 25 Nov |
+| vdev/ fixes (route_tags, menu 08/09, validation order, pkg_safe, git_offer, sync) | before/after reproduction tests (25 Nov) |
+| bash -n, sh -n, ast.parse, yaml.safe_load, JSON valid | command output |
 
 ### Outstanding / not applied
 

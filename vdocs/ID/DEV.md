@@ -216,18 +216,53 @@ Konvensi:
   dari source (§14).
 
 ## 6. Alur Developer
-
 `vdev/tools.sh` adalah dispatcher tipis; semua logika ada di `vdev/src/*.sh`.
 Modul-modul itu hanya mendefinisikan fungsi — men-source-nya tidak menimbulkan
 side effect, jadi CI dan Let-X bisa memakainya ulang dengan aman.
 
-```sh
-vdev/tools.sh -s              # clone void-packages + binary-bootstrap
+```
+vdev/tools.sh -s              # clone void-packages + binary-bootstrap 9 archs + enable restricted
 vdev/tools.sh -sy             # git pull + salin template baru/berubah
-vdev/tools.sh -U              # jalankan xbps-src bootstrap-update
+vdev/tools.sh -U              # jalankan xbps-src bootstrap-update untuk semua archs
 vdev/tools.sh -b <pkg>        # build
+vdev/tools.sh -f <pkg>        # force rebuild (xbps-src -f)
+vdev/tools.sh -c              # clean build artifacts (xbps-src clean)
+vdev/tools.sh -z              # hapus masterdir (xbps-src zap)
 vdev/tools.sh -u <pkg>        # upload + trigger CI, lalu tawarkan push/PR
 ```
+
+### Setup
+`vdev/tools.sh -s` sekarang menyiapkan **semua 9 arsitektur** sekaligus:
+- Clone void-packages (full history)
+- Binary-bootstrap untuk `x86_64`, `x86_64-musl`, `aarch64`, `aarch64-musl`, `armv6l`, `armv6l-musl`, `armv7l`, `armv7l-musl`, `i686`
+- Otomatis mengaktifkan `XBPS_ALLOW_RESTRICTED=yes` di `$VP/etc/conf`
+
+Masterdir yang sudah ada akan dilewati (tidak di-bootstrap ulang).
+
+### Update
+`vdev/tools.sh -U` melakukan:
+1. `git pull --ff-only` pada void-packages
+2. `xbps-src -A <arch> bootstrap-update` untuk setiap masterdir yang sudah ada
+
+### Force Build
+`vdev/tools.sh -f` mengikuti pola yang sama dengan `-b`, tapi memaksa rebuild dari nol:
+
+```
+vdev/tools.sh -f                         # interaktif
+vdev/tools.sh -f tpkg zvc                # beberapa paket
+vdev/tools.sh -f tpkg   -a aarch64       # satu arsitektur
+vdev/tools.sh -f tpkg   -a all           # semua yang didukung
+vdev/tools.sh -f zvc    -a 'x86_64*'     # x86_64 glibc + musl
+```
+
+Flag `-f` di `xbps-src` memaksa rebuild meskipun package sudah ada di cache. Berguna
+untuk perubahan besar di template atau retry setelah build gagal.
+
+### Clean & Zap
+- `vdev/tools.sh -c` — jalankan `xbps-src clean` untuk membersihkan build artifacts
+  (wrkdir, destdir), tapi masterdir tetap ada
+- `vdev/tools.sh -z` — jalankan `xbps-src zap` untuk menghapus **semua masterdir**.
+  Setelah zap, perlu jalankan `-s` lagi untuk bootstrap ulang (bisa lama)
 
 ### Build
 
@@ -564,24 +599,26 @@ luar itu dijawab 404 walaupun file-nya ada di release.
 | Domain terlihat bermasalah | jalankan `bash vdev/DNS-check.sh` dan cocokkan dengan §13 |
 
 ## 12. Status Implementasi
-
-Diperbarui 25 November 2026. Setiap baris "terverifikasi" punya bukti keluaran
+Diperbarui 27 November 2026. Setiap baris "terverifikasi" punya bukti keluaran
 perintah, uji di sandbox, atau log CI; yang lain ditandai eksplisit.
 
 ### Terverifikasi
-
 | Item | Bukti |
-|---|---|
-| `flags_for` benar untuk 9 target dari host `x86_64`; host `x86_64-musl`, `i686`, `aarch64` dicek lewat override `HOST_ARCH` | keluaran uji (25 Nov), cocok tabel §6 |
-| **Signing berjalan** — tag punya `.xbps` + `.sig2` + `<tag>-repodata` | screenshot Releases (`tpkg-1.1.0_1`, lalu `_2`) (24 Nov) |
-| `FINGERPRINT` di `setup.sh` = MD5 blob `keys/key.pem.pub` | dihitung ulang (25 Nov) |
-| `json/<tag>/packages.json` ×9 sudah ter-commit CI | `ls json/*` |
-| `.github/workflows/` = 3 file; `vdev/src/` = 7 modul | `ls -1` |
-| `process.yml` = 4 job; step `json` memakai `shell: bash`; `permissions` per job; action dipin SHA | `grep` + `yaml.safe_load` |
-| Parser Bash/awk ≡ Python (field dan `archs`), tanpa glob terhadap cwd | uji paritas 56 kasus (25 Nov) |
-| `process-tag.sh`: upload ulang nama sama, versi baru ditolak, run lanjutan tanpa churn, `.sig2` yatim | harness stub (`gh`/`xbps-*` palsu), 25 Nov |
-| Perbaikan `vdev/` (`route_tags`, menu `08`/`09`, urutan validasi, `pkg_safe`, `git_offer`, sync) | uji reproduksi sebelum/sesudah (25 Nov) |
-| `bash -n`, `sh -n`, `ast.parse`, `yaml.safe_load`, JSON valid | keluaran perintah |
+| --- | --- |
+| `cmd_setup` bootstrap 9 archs + enable restricted | kode + uji manual (27 Nov) |
+| `cmd_update` pull + bootstrap-update 9 archs | kode + uji manual (27 Nov) |
+| `cmd_force` mengikuti pola `cmd_build` dengan flag `-f` | kode + uji manual (27 Nov) |
+| `cmd_clean` dan `cmd_zap` wrapper untuk xbps-src | kode (27 Nov) |
+| flags_for benar untuk 9 target dari host x86_64; x86_64-musl, i686, aarch64 dicek lewat override HOST_ARCH | keluaran uji (25 Nov), cocok tabel §6 |
+| Signing berjalan — tag punya .xbps + .sig2 + <tag>-repodata | screenshot Releases (tpkg-1.1.0_1, lalu _2) (24 Nov) |
+| FINGERPRINT di setup.sh = MD5 blob keys/key.pem.pub | dihitung ulang (25 Nov) |
+| json/<tag>/packages.json ×9 sudah ter-commit CI | ls json/* |
+| .github/workflows/ = 3 file; vdev/src/ = 7 modul | ls -1 |
+| process.yml = 4 job; step json memakai shell: bash; permissions per job; action dipin SHA | grep + yaml.safe_load |
+| Parser Bash/awk ≡ Python (field dan archs), tanpa glob terhadap cwd | uji paritas 56 kasus (25 Nov) |
+| process-tag.sh: upload ulang nama sama, versi baru ditolak, run lanjutan tanpa churn, .sig2 yatim | harness stub (gh/xbps-* palsu), 25 Nov |
+| Perbaikan vdev/ (route_tags, menu 08/09, urutan validasi, pkg_safe, git_offer, sync) | uji reproduksi sebelum/sesudah (25 Nov) |
+| bash -n, sh -n, ast.parse, yaml.safe_load, JSON valid | keluaran perintah |
 
 ### Belum selesai / belum diterapkan
 

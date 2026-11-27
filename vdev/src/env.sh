@@ -1,6 +1,7 @@
 # Environment build: clone, bootstrap, sync template, flag xbps-src.
 
 cmd_setup(){
+    # 1. Clone atau update void-packages
     if [ -d "$VP/.git" ]; then
         ok "void-packages sudah ada"
         if [ -f "$VP/.git/shallow" ]; then
@@ -11,11 +12,38 @@ cmd_setup(){
         info "Clone void-packages (full history, bisa >1 GB dan lama)..."
         git clone https://github.com/void-linux/void-packages "$VP"
     fi
-    if [ -d "$VP/masterdir-$HOST_ARCH" ]; then
-        ok "masterdir-$HOST_ARCH siap"
+
+    # 2. Bootstrap semua 9 arsitektur
+    local arch ok_count=0 fail_count=0 skip_count=0
+    for arch in "${ALL[@]}"; do
+        local mdir="$VP/masterdir-$arch"
+        if [ -d "$mdir" ]; then
+            info "masterdir-$arch sudah ada — dilewati"
+            skip_count=$((skip_count+1))
+            continue
+        fi
+        info "binary-bootstrap untuk $arch ..."
+        if (cd "$VP" && ./xbps-src -A "$arch" binary-bootstrap); then
+            ok "masterdir-$arch siap"
+            ok_count=$((ok_count+1))
+        else
+            warn "masterdir-$arch gagal di-bootstrap"
+            fail_count=$((fail_count+1))
+        fi
+    done
+
+    # 3. Enable restricted packages
+    if ! grep -q "^XBPS_ALLOW_RESTRICTED=yes" "$VP/etc/conf" 2>/dev/null; then
+        mkdir -p "$VP/etc"
+        echo "XBPS_ALLOW_RESTRICTED=yes" >> "$VP/etc/conf"
+        ok "XBPS_ALLOW_RESTRICTED=yes diaktifkan di $VP/etc/conf"
     else
-        info "binary-bootstrap..."
-        (cd "$VP" && ./xbps-src binary-bootstrap)
+        ok "XBPS_ALLOW_RESTRICTED=yes sudah aktif"
+    fi
+
+    info "ringkasan setup: $ok_count dibuat, $skip_count sudah ada, $fail_count gagal"
+    if [ "$fail_count" -gt 0 ]; then
+        warn "beberapa arsitektur gagal di-bootstrap, tapi setup tetap lanjut"
     fi
 }
 
@@ -50,6 +78,106 @@ cmd_update(){
     else
         warn "bootstrap-update gagal (exit $?), cek log di atas"
         return 1
+    fi
+}
+
+cmd_force(){
+    local pkgs=() req=() r pkg t sup want targets x f
+    local okl="" badl="" noarch=0 rc=0
+    
+    # Parse arguments
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -a|--arch) shift; while [ $# -gt 0 ] && [[ $1 != -* ]]; do req+=("$1"); shift; done ;;
+            *) pkgs+=("$1"); shift ;;
+        esac
+    done
+    
+    # Jika tidak ada package, tampilkan menu
+    if [ ${#pkgs[@]} -eq 0 ]; then 
+        mapfile -t pkgs < <(menu_pkg)
+    fi
+    [ ${#pkgs[@]} -gt 0 ] || die "tidak ada package"
+    
+    # Validasi semua nama + template dulu
+    for pkg in "${pkgs[@]}"; do
+        pkg_safe "$pkg" || die "nama paket tidak aman: '$pkg'"
+        [ -f "$TPL/$pkg/template" ] || die "template tidak ada: $TPL/$pkg/template"
+    done
+    
+    # Pastikan void-packages sudah di-setup
+    [ -d "$VP" ] || cmd_setup
+    
+    # Proses setiap package
+    for pkg in "${pkgs[@]}"; do
+        mapfile -t sup < <(tpl_supported "$pkg")
+        [ ${#sup[@]} -gt 0 ] || { warn "$pkg: archs kosong setelah ekspansi, skip"; continue; }
+        
+        want=()
+        if [ ${#req[@]} -gt 0 ]; then
+            for r in "${req[@]}"; do
+                mapfile -t -O ${#want[@]} want < <(expand_archs "$r")
+            done
+        else
+            mapfile -t want < <(menu_arch "$pkg")
+        fi
+        
+        targets=()
+        for x in "${want[@]}"; do
+            in_list "${sup[*]}" "$x" || continue
+            in_list "${targets[*]}" "$x" || targets+=("$x")
+        done
+        [ ${#targets[@]} -gt 0 ] || { warn "$pkg: tidak ada irisan arch, skip"; continue; }
+        
+        info "$pkg support : ${sup[*]}"
+        info "$pkg di-force  : ${targets[*]}"
+        tpl_stage "$pkg"
+        
+        okl=""; badl=""; noarch=0
+        if tpl_is_noarch "$pkg"; then
+            noarch=1
+            info "$pkg noarch — satu force build untuk ${#targets[@]} tag"
+        fi
+        
+        for x in "${targets[@]}"; do
+            if [ "$noarch" = 1 ] && [ "$x" != "${targets[0]}" ]; then continue; fi
+            f=()
+            mapfile -t f < <(flags_for "$x")
+            info "Force building: xbps-src -f ${f[*]:-} pkg $pkg ($x)"
+            if (cd "$VP" && ./xbps-src -f ${f[@]+"${f[@]}"} pkg "$pkg"); then
+                ok "$pkg $x → $VP/hostdir/binpkgs/"
+                if [ "$noarch" = 1 ]; then okl="${targets[*]}"; else okl="$okl $x"; fi
+            else
+                err "gagal: $pkg $x — lanjut ke arsitektur berikutnya"
+                if [ "$noarch" = 1 ]; then badl="${targets[*]}"; else badl="$badl $x"; fi
+                rc=1
+            fi
+        done
+        build_summary "$pkg" "${okl# }" "${badl# }"
+    done
+    return $rc
+}
+
+cmd_clean(){
+    [ -d "$VP" ] || die "void-packages belum di-setup. Jalankan: tools --setup"
+    
+    info "Menjalankan xbps-src clean..."
+    if (cd "$VP" && ./xbps-src clean); then
+        ok "clean selesai — build artifacts dibersihkan"
+    else
+        die "clean gagal"
+    fi
+}
+
+cmd_zap(){
+    [ -d "$VP" ] || die "void-packages belum di-setup. Jalankan: tools --setup"
+    
+    info "Menjalankan xbps-src zap..."
+    if (cd "$VP" && ./xbps-src zap); then
+        ok "zap selesai — masterdir dihapus"
+        warn "Jalankan tools --setup untuk membuat masterdir lagi"
+    else
+        die "zap gagal"
     fi
 }
 
