@@ -23,6 +23,7 @@ usage(){
 T4n OS developer tool (xbps-src)
   -s,  --setup              clone void-packages (full) + binary-bootstrap
   -sy, --sync               git pull + salin template baru/berubah
+  -U,  --update             jalankan xbps-src bootstrap-update
   -b,  --build [pkg...] [-a arch...|all|'x86_64*']
   -u,  --upload [pkg...]    upload ke tag + trigger CI, lalu push/PR
        search <query>       cari template (nama atau deskripsi) + info detail
@@ -36,6 +37,7 @@ EOF
 case "${1:-}" in
     -s|--setup)      cmd_setup ;;
     -sy|--sync)      cmd_sync ;;
+    -U|--update)     cmd_update ;;
     -b|--build)      shift; cmd_build "$@" ;;
     -u|--upload)     shift; cmd_upload "$@" ;;
     search)          shift; cmd_search "$@" ;;

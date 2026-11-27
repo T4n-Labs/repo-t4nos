@@ -37,6 +37,22 @@ cmd_sync(){
     ok "$n template disinkronkan"
 }
 
+cmd_update(){
+    # Pastikan void-packages sudah di-setup
+    if [ ! -d "$VP" ] || [ ! -x "$VP/xbps-src" ]; then
+        err "update: void-packages belum di-setup. Jalankan: tools --setup"
+        return 1
+    fi
+
+    info "Menjalankan xbps-src bootstrap-update di $VP ..."
+    if (cd "$VP" && ./xbps-src bootstrap-update); then
+        ok "bootstrap-update selesai"
+    else
+        warn "bootstrap-update gagal (exit $?), cek log di atas"
+        return 1
+    fi
+}
+
 # Daftar nama yang pernah kita salin ke $VP/srcpkgs (di dalam .git → tidak mengotori
 # `git status`). Dipakai untuk membersihkan salinan template yang sudah dihapus dari
 # pkg-template/. Pelacakan dimulai sejak sync/stage pertama dengan versi ini.
