@@ -86,8 +86,8 @@
       "armv7l-musl",
       "i686"
     ],
-    "size": null,
-    "category": "template",
+    "size": 10234862,
+    "category": "xbps",
     "desc": "Advanced command line debugger and hexadecimal editor",
     "homepage": "https://www.radare.org",
     "maintainer": "gh0st4n <darskevoid@gmail.com>",
