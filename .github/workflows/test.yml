@@ -1,0 +1,56 @@
+# Workflow TEST — sengaja TERPISAH dari process.yml (yang memegang SIGN_KEY).
+# Menjalankan suite `bash tests/run.sh`: hanya membaca kode, tanpa secret, tanpa izin
+# tulis, tanpa jaringan di dalam tes (gh/xbps-* dipalsukan). Resep di pkg-template/ hanya
+# DIPARSE (awk/regex) oleh tes, tidak pernah di-source/di-exec (Invarian 3).
+# `push`/`pull_request` diizinkan HANYA untuk workflow ini (persetujuan eksplisit
+# Founder; Invarian 9 tetap berlaku untuk process.yml). `pull_request_target`,
+# `workflow_run`, dan `schedule` tidak boleh dipakai di sini.
+name: test
+
+on:
+  pull_request:
+    paths:
+      - 'vdev/**'
+      - '.github/workflows/**'
+      - 'setup.sh'
+      - 'pkg-template/**'
+      - 'tests/**'
+      - 'keys/**'
+      - 'vdocs/**'
+      - 'README.md'
+      - 'README.ID.md'
+      - '.gitignore'
+  push:
+    branches:
+      - main
+    paths:
+      - 'vdev/**'
+      - '.github/workflows/**'
+      - 'setup.sh'
+      - 'pkg-template/**'
+      - 'tests/**'
+      - 'keys/**'
+      - 'vdocs/**'
+      - 'README.md'
+      - 'README.ID.md'
+      - '.gitignore'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (tanpa menyimpan kredensial)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Jalankan suite test
+        run: bash tests/run.sh -v
